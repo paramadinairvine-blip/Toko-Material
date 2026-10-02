@@ -338,6 +338,18 @@ const remove = async (id, userId) => {
     throw new AppError('Produk tidak ditemukan', 404);
   }
 
+  // Produk yang masih ada di PO yang belum selesai tidak boleh dihapus
+  const activePOItem = await prisma.purchaseOrderItem.findFirst({
+    where: {
+      productId: id,
+      purchaseOrder: { status: { in: ['DRAFT', 'SENT', 'PARTIALLY_RECEIVED'] } },
+    },
+    include: { purchaseOrder: { select: { poNumber: true } } },
+  });
+  if (activePOItem) {
+    throw new AppError(`Produk tidak bisa dihapus karena masih digunakan di PO aktif (${activePOItem.purchaseOrder.poNumber})`, 400);
+  }
+
   const product = await prisma.product.update({
     where: { id },
     data: { isActive: false, updatedBy: userId },
