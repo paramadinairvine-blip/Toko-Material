@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { HiEye, HiSearch } from 'react-icons/hi';
 import { transactionAPI } from '../../api/endpoints';
 import { Table, Badge, Pagination, CalendarPicker } from '../../components/common';
@@ -11,23 +11,68 @@ import {
   TRANSACTION_STATUS_LABELS, TRANSACTION_STATUS_COLORS,
 } from '../../utils/constants';
 
+// The date filter comes from the URL, so it can be anything the user typed there
+const isValidDateParam = (value) =>
+  /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00+07:00`));
+
 export default function TransactionList() {
   const navigate = useNavigate();
-  const [page, setPage] = useState(1);
-  const [search, setSearch] = useState('');
-  const [date, setDate] = useState('');
-  const [customerName, setCustomerName] = useState('');
+  const [searchParams, setSearchParams] = useSearchParams();
 
-  // Applied filters (only update on search click / enter)
-  const [appliedFilters, setAppliedFilters] = useState({
-    search: '',
-    date: '',
-    customerName: '',
-  });
+  // Applied filters & page live in the URL so they survive refresh and back navigation
+  const page = Math.max(1, parseInt(searchParams.get('page'), 10) || 1);
+  const dateParam = searchParams.get('date') || '';
+  const appliedFilters = {
+    search: searchParams.get('search') || '',
+    date: isValidDateParam(dateParam) ? dateParam : '',
+    customerName: searchParams.get('customerName') || '',
+  };
+
+  // Input values (only applied on search click / enter)
+  const [search, setSearch] = useState(appliedFilters.search);
+  const [date, setDate] = useState(appliedFilters.date);
+  const [customerName, setCustomerName] = useState(appliedFilters.customerName);
+
+  // Keep the inputs in step when the URL changes underneath (browser back / forward)
+  const appliedKey = `${appliedFilters.search}|${appliedFilters.date}|${appliedFilters.customerName}`;
+  const [syncedKey, setSyncedKey] = useState(appliedKey);
+  if (syncedKey !== appliedKey) {
+    setSyncedKey(appliedKey);
+    setSearch(appliedFilters.search);
+    setDate(appliedFilters.date);
+    setCustomerName(appliedFilters.customerName);
+  }
+
+  // `replace` when nothing changes, so repeated clicks don't stack identical history entries
+  const setPage = (p) => {
+    const params = new URLSearchParams(searchParams);
+    params.set('page', String(p));
+    setSearchParams(params, { replace: p === page });
+  };
 
   const applyFilters = () => {
-    setAppliedFilters({ search, date, customerName });
-    setPage(1);
+    const params = new URLSearchParams();
+    if (search) params.set('search', search);
+    if (date) params.set('date', date);
+    if (customerName) params.set('customerName', customerName);
+    params.set('page', '1');
+    const unchanged = page === 1
+      && search === appliedFilters.search
+      && date === appliedFilters.date
+      && customerName === appliedFilters.customerName;
+    setSearchParams(params, { replace: unchanged });
+  };
+
+  const hasFilters = Boolean(
+    search || date || customerName
+    || appliedFilters.search || appliedFilters.date || appliedFilters.customerName
+  );
+
+  const resetFilters = () => {
+    setSearch('');
+    setDate('');
+    setCustomerName('');
+    setSearchParams({});
   };
 
   const handleKeyDown = (e) => {
@@ -155,6 +200,15 @@ export default function TransactionList() {
         >
           <HiSearch className="w-5 h-5" />
         </button>
+        {hasFilters && (
+          <button
+            type="button"
+            onClick={resetFilters}
+            className="px-3 py-2.5 text-sm text-gray-600 border border-gray-300 rounded-xl hover:bg-gray-50 transition-colors"
+          >
+            Reset
+          </button>
+        )}
       </div>
 
       {/* Table */}
