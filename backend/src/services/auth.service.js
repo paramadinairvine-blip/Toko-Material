@@ -5,7 +5,7 @@ const crypto = require('crypto');
 const AppError = require('../utils/AppError');
 
 const SALT_ROUNDS = 12;
-const ACCESS_TOKEN_EXPIRES = process.env.JWT_EXPIRES_IN || '7d';
+const ACCESS_TOKEN_EXPIRES = process.env.JWT_EXPIRES_IN || '15m';
 const REFRESH_TOKEN_EXPIRES_DAYS = 30;
 
 /**

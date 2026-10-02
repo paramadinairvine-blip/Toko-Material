@@ -80,7 +80,7 @@ export default function PurchaseOrderForm() {
             variantId: item.variantId || '',
             unitId: item.unitId || '',
             quantity: item.quantity?.toString() || '1',
-            unitPrice: item.unitPrice?.toString() || '',
+            unitPrice: (item.unitPrice ?? item.price)?.toString() || '',
             discount: item.discount?.toString() || '0',
             product: item.product || null,
           }))

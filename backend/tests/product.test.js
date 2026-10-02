@@ -98,4 +98,40 @@ describe('DELETE /api/products/:id', () => {
 
     expect(res.status).toBe(403);
   });
+
+  test('should deactivate product that is not on any active PO', async () => {
+    mockPrisma.product.findUnique.mockResolvedValue(sampleProduct);
+    mockPrisma.purchaseOrderItem.findFirst.mockResolvedValue(null);
+    mockPrisma.product.update.mockResolvedValue({ ...sampleProduct, isActive: false });
+    mockPrisma.auditLog.create.mockResolvedValue({});
+
+    const res = await request(app)
+      .delete('/api/products/prod-1')
+      .set('Authorization', `Bearer ${adminToken}`);
+
+    expect(res.status).toBe(200);
+    expect(mockPrisma.product.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'prod-1' },
+      data: expect.objectContaining({ isActive: false }),
+    }));
+  });
+
+  test('should reject product that is still on an active PO', async () => {
+    mockPrisma.product.findUnique.mockResolvedValue(sampleProduct);
+    mockPrisma.purchaseOrderItem.findFirst.mockResolvedValue({ purchaseOrder: { poNumber: 'PO-2026-002' } });
+
+    const res = await request(app)
+      .delete('/api/products/prod-1')
+      .set('Authorization', `Bearer ${adminToken}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toContain('PO-2026-002');
+    expect(mockPrisma.purchaseOrderItem.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        productId: 'prod-1',
+        purchaseOrder: { status: { in: ['DRAFT', 'SENT', 'PARTIALLY_RECEIVED'] } },
+      },
+    }));
+    expect(mockPrisma.product.update).not.toHaveBeenCalled();
+  });
 });

@@ -156,6 +156,22 @@ describe('DELETE /api/suppliers/:id', () => {
     expect(res.status).toBe(200);
   });
 
+  test('should reject supplier that still has an active PO', async () => {
+    mockPrisma.supplier.findUnique.mockResolvedValue(sampleSupplier);
+    mockPrisma.purchaseOrder.findFirst.mockResolvedValue({ poNumber: 'PO-2026-001' });
+
+    const res = await request(app)
+      .delete('/api/suppliers/s-1')
+      .set('Authorization', `Bearer ${adminToken}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toContain('PO-2026-001');
+    expect(mockPrisma.purchaseOrder.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: { supplierId: 's-1', status: { in: ['DRAFT', 'SENT', 'PARTIALLY_RECEIVED'] } },
+    }));
+    expect(mockPrisma.supplier.update).not.toHaveBeenCalled();
+  });
+
   test('should reject non-ADMIN', async () => {
     const res = await request(app)
       .delete('/api/suppliers/s-1')

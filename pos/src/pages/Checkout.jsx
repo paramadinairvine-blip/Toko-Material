@@ -91,6 +91,9 @@ export default function Checkout() {
   });
 
   const handleSubmit = () => {
+    // Already paid (receipt showing) or still submitting: never create the transaction twice
+    if (receiptData || createMutation.isPending) return;
+
     if (items.length === 0) {
       toast.error('Keranjang kosong');
       return;
@@ -136,8 +139,14 @@ export default function Checkout() {
     navigate('/kasir');
   };
 
+  // Empty cart (e.g. page refreshed on /checkout): go back to the cashier screen
+  useEffect(() => {
+    if (items.length === 0 && !receiptData) {
+      navigate('/kasir', { replace: true });
+    }
+  }, [items.length, receiptData, navigate]);
+
   if (items.length === 0 && !receiptData) {
-    navigate('/kasir');
     return null;
   }
 

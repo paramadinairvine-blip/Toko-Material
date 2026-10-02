@@ -90,10 +90,18 @@ axiosInstance.interceptors.response.use(
         return axiosInstance(originalRequest);
       } catch (refreshError) {
         processQueue(refreshError, null);
-        localStorage.removeItem('accessToken');
-        localStorage.removeItem('refreshToken');
-        localStorage.removeItem('user');
-        window.location.href = '/login';
+        const status = refreshError.response?.status;
+        if (status === 401 || status === 403) {
+          localStorage.removeItem('accessToken');
+          localStorage.removeItem('refreshToken');
+          localStorage.removeItem('user');
+          window.location.href = '/login';
+        } else {
+          // Temporary failure (server/network): keep the session and the cart, the next request retries
+          refreshError.message = refreshError.response
+            ? 'Terjadi kesalahan pada server. Silakan coba lagi nanti.'
+            : 'Gagal terhubung ke server. Periksa koneksi internet Anda.';
+        }
         return Promise.reject(refreshError);
       } finally {
         isRefreshing = false;

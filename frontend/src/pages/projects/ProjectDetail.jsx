@@ -11,7 +11,7 @@ import { formatRupiah, formatNumber } from '../../utils/formatCurrency';
 import { formatTanggal, formatTanggalPanjang, formatTanggalWaktu } from '../../utils/formatDate';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { PROJECT_STATUS_LABELS, PROJECT_STATUS_COLORS, STORE_INFO } from '../../utils/constants';
+import { PROJECT_STATUS, PROJECT_STATUS_LABELS, PROJECT_STATUS_COLORS, STORE_INFO } from '../../utils/constants';
 import useAuth from '../../hooks/useAuth';
 
 function ProgressBar({ value, height = 'h-2', className = '' }) {
@@ -166,7 +166,6 @@ export default function ProjectDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { isAdmin, isKasir } = useAuth();
-  const canEdit = isAdmin || isKasir;
   const printRef = useRef();
 
   const [updateMaterial, setUpdateMaterial] = useState(null);
@@ -178,6 +177,10 @@ export default function ProjectDetail() {
       return data.data;
     },
   });
+
+  // Proyek selesai / dibatalkan hanya bisa dilihat
+  const isEditable = !!project && ![PROJECT_STATUS.COMPLETED, PROJECT_STATUS.CANCELLED].includes(project.status);
+  const canEdit = (isAdmin || isKasir) && isEditable;
 
   const { data: report } = useQuery({
     queryKey: ['project-report', id],
@@ -535,7 +538,7 @@ export default function ProjectDetail() {
       )}
 
       {/* Update Material Usage Modal */}
-      {updateMaterial && (
+      {canEdit && updateMaterial && (
         <UpdateUsageModal
           material={updateMaterial}
           projectId={id}

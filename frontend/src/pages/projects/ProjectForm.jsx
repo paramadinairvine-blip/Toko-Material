@@ -197,6 +197,10 @@ export default function ProjectForm() {
     onSuccess: () => {
       toast.success(isEdit ? 'Proyek berhasil diperbarui' : 'Proyek berhasil dibuat');
       queryClient.invalidateQueries({ queryKey: ['projects'] });
+      if (isEdit) {
+        queryClient.invalidateQueries({ queryKey: ['project', id] });
+        queryClient.invalidateQueries({ queryKey: ['project-report', id] });
+      }
       navigate('/proyek');
     },
     onError: (err) => toast.error(getErrorMessage(err, 'Gagal menyimpan proyek')),
