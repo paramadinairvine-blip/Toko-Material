@@ -91,6 +91,9 @@ export default function Checkout() {
   });
 
   const handleSubmit = () => {
+    // Already paid (receipt showing) or still submitting: never create the transaction twice
+    if (receiptData || createMutation.isPending) return;
+
     if (items.length === 0) {
       toast.error('Keranjang kosong');
       return;
