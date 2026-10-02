@@ -136,8 +136,14 @@ export default function Checkout() {
     navigate('/kasir');
   };
 
+  // Empty cart (e.g. page refreshed on /checkout): go back to the cashier screen
+  useEffect(() => {
+    if (items.length === 0 && !receiptData) {
+      navigate('/kasir', { replace: true });
+    }
+  }, [items.length, receiptData, navigate]);
+
   if (items.length === 0 && !receiptData) {
-    navigate('/kasir');
     return null;
   }
 
