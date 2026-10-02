@@ -64,7 +64,9 @@ const globalLimiter = rateLimit({
 });
 app.use('/api', globalLimiter);
 
-// Rate limiting — auth (lebih ketat)
+// Rate limiting — login (lebih ketat)
+// Hanya /auth/login. /auth/refresh dipanggil rutin oleh tiap klien karena access token
+// berumur pendek, jadi tidak boleh ikut menghabiskan jatah percobaan login.
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 menit
   max: 20,
@@ -72,7 +74,7 @@ const authLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
 });
-app.use('/api/auth', authLimiter);
+app.use('/api/auth/login', authLimiter);
 
 // ─── Compression ────────────────────────────────────
 app.use(compression());
