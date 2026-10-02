@@ -103,4 +103,44 @@ describe('PUT /api/stock-opname/:id/complete', () => {
       .set('Authorization', `Bearer ${kasirToken}`);
     expect(res.status).toBe(403);
   });
+
+  const opnameWithDifference = (difference) => ({
+    id: 'opname-1', opnameNumber: 'SO-2026-001', status: 'IN_PROGRESS',
+    items: [{ productId: 'prod-1', difference }],
+  });
+
+  test('should reject completion when stock would become negative', async () => {
+    mockPrisma.stockOpname.findUnique.mockResolvedValue(opnameWithDifference(-10));
+    mockPrisma.$queryRaw.mockResolvedValue([{ id: 'prod-1', name: 'Semen Tiga Roda', stock: 4 }]);
+
+    const res = await request(app)
+      .put('/api/stock-opname/opname-1/complete')
+      .set('Authorization', `Bearer ${adminToken}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toContain('Semen Tiga Roda');
+    expect(res.body.message).toContain('negatif (-6)');
+    expect(mockPrisma.stockMovement.create).not.toHaveBeenCalled();
+    expect(mockPrisma.product.update).not.toHaveBeenCalled();
+    expect(mockPrisma.stockOpname.update).not.toHaveBeenCalled();
+  });
+
+  test('should apply the difference when stock stays at zero or above', async () => {
+    mockPrisma.stockOpname.findUnique.mockResolvedValue(opnameWithDifference(-10));
+    mockPrisma.$queryRaw.mockResolvedValue([{ id: 'prod-1', name: 'Semen Tiga Roda', stock: 10 }]);
+    mockPrisma.stockMovement.create.mockResolvedValue({ id: 'mov-1', productId: 'prod-1' });
+    mockPrisma.product.update.mockResolvedValue({});
+    mockPrisma.stockOpname.update.mockResolvedValue({ id: 'opname-1', status: 'COMPLETED', items: [] });
+    mockPrisma.auditLog.create.mockResolvedValue({});
+
+    const res = await request(app)
+      .put('/api/stock-opname/opname-1/complete')
+      .set('Authorization', `Bearer ${adminToken}`);
+
+    expect(res.status).toBe(200);
+    expect(mockPrisma.product.update).toHaveBeenCalledWith({
+      where: { id: 'prod-1' },
+      data: { stock: 0 },
+    });
+  });
 });

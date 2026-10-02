@@ -424,6 +424,10 @@ const completeOpname = async (opnameId, userId) => {
         const currentStock = product.stock;
         const newStock = currentStock + item.difference;
 
+        if (newStock < 0) {
+          throw new AppError(`Stok produk ${product.name} akan menjadi negatif (${newStock}): stok saat ini ${currentStock}, selisih opname ${item.difference}. Periksa kembali data stock opname.`, 400);
+        }
+
         const movement = await tx.stockMovement.create({
           data: {
             productId: item.productId,
