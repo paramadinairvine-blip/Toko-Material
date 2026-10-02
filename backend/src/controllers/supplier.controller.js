@@ -141,6 +141,15 @@ const remove = async (req, res) => {
     const existing = await prisma.supplier.findUnique({ where: { id } });
     if (!existing) return errorResponse(res, 'Supplier tidak ditemukan', 404);
 
+    // Supplier yang masih punya PO yang belum selesai tidak boleh dihapus
+    const activePO = await prisma.purchaseOrder.findFirst({
+      where: { supplierId: id, status: { in: ['DRAFT', 'SENT', 'PARTIALLY_RECEIVED'] } },
+      select: { poNumber: true },
+    });
+    if (activePO) {
+      return errorResponse(res, `Supplier tidak bisa dihapus karena masih memiliki PO aktif (${activePO.poNumber})`, 400);
+    }
+
     await prisma.supplier.update({
       where: { id },
       data: { isActive: false, updatedBy: req.user.id },
