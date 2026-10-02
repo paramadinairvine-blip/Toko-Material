@@ -39,12 +39,14 @@ function playBeep() {
  * @param {boolean}  opts.enabled   - Enable/disable the listener (default: true)
  * @param {number}   opts.maxDelay  - Max ms between keystrokes to count as scan (default: 80)
  * @param {number}   opts.minLength - Min barcode length to be valid (default: 3)
+ * @param {number}   opts.debounceMs - Ignore the same barcode scanned again within this many ms (default: 300)
  */
-export default function useBarcodeScanner(onScan, { enabled = true, maxDelay = 80, minLength = 3 } = {}) {
+export default function useBarcodeScanner(onScan, { enabled = true, maxDelay = 80, minLength = 3, debounceMs = 300 } = {}) {
   const bufferRef = useRef('');
   const lastKeyTimeRef = useRef(0);
   const timerRef = useRef(null);
   const onScanRef = useRef(onScan);
+  const lastScannedRef = useRef({ code: '', time: 0 });
 
   // Keep callback ref fresh without re-registering listener
   useEffect(() => {
@@ -77,6 +79,15 @@ export default function useBarcodeScanner(onScan, { enabled = true, maxDelay = 8
           // Prevent the Enter from submitting forms, etc.
           e.preventDefault();
           e.stopPropagation();
+
+          // Ignore the same barcode fired again right away (scanner double-trigger)
+          const last = lastScannedRef.current;
+          if (code === last.code && now - last.time < debounceMs) {
+            bufferRef.current = '';
+            return;
+          }
+          lastScannedRef.current = { code, time: now };
+
           playBeep();
           onScanRef.current(code);
         }
@@ -98,5 +109,5 @@ export default function useBarcodeScanner(onScan, { enabled = true, maxDelay = 8
       window.removeEventListener('keydown', handleKeyDown, true);
       clearTimeout(timerRef.current);
     };
-  }, [enabled, maxDelay, minLength, resetBuffer]);
+  }, [enabled, maxDelay, minLength, debounceMs, resetBuffer]);
 }
