@@ -99,18 +99,18 @@ export default function ProfitLossReport() {
   const handleExportExcel = () => {
     const headers = ['Komponen', 'Nilai (Rp)'];
     const rows = [
-      ['Penjualan Tunai', formatNumber(summary.cashRevenue || 0)],
-      ['Penjualan Bon', formatNumber(summary.bonRevenue || 0)],
-      ['Retur Penjualan', formatNumber(-(summary.totalReturn || 0))],
-      ['Pendapatan Bersih', formatNumber(summary.netRevenue || 0)],
+      ['Penjualan Tunai', Number(summary.cashRevenue) || 0],
+      ['Penjualan Bon', Number(summary.bonRevenue) || 0],
+      ['Retur Penjualan', -(Number(summary.totalReturn) || 0)],
+      ['Pendapatan Bersih', Number(summary.netRevenue) || 0],
       [''],
-      ['Harga Pokok Penjualan (HPP)', formatNumber(-(summary.totalHPP || 0))],
+      ['Harga Pokok Penjualan (HPP)', -(Number(summary.totalHPP) || 0)],
       [''],
-      ['LABA KOTOR', formatNumber(summary.grossProfit || 0)],
+      ['LABA KOTOR', Number(summary.grossProfit) || 0],
       ['Margin Laba Kotor (%)', `${summary.grossMarginPercent || 0}%`],
       [''],
       ['--- HPP per Kategori ---'],
-      ...hppByCategory.map((c) => [c.categoryName, formatNumber(c.totalHPP)]),
+      ...hppByCategory.map((c) => [c.categoryName, Number(c.totalHPP) || 0]),
     ];
     exportToExcel('Laba Rugi', headers, rows, 'laba-rugi.xlsx');
   };
