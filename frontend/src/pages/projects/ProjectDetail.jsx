@@ -11,6 +11,7 @@ import { formatRupiah, formatNumber } from '../../utils/formatCurrency';
 import { formatTanggal, formatTanggalPanjang, formatTanggalWaktu } from '../../utils/formatDate';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { addPageNumbers } from '../../utils/exportPDF';
 import { PROJECT_STATUS, PROJECT_STATUS_LABELS, PROJECT_STATUS_COLORS, STORE_INFO } from '../../utils/constants';
 import useAuth from '../../hooks/useAuth';
 
@@ -290,12 +291,6 @@ export default function ProjectDetail() {
       },
       styles: { cellPadding: 2, overflow: 'linebreak' },
       margin: { left: 14, right: 14 },
-      didDrawPage: (data) => {
-        const pageCount = doc.internal.getNumberOfPages();
-        doc.setFontSize(8);
-        doc.setFont(undefined, 'normal');
-        doc.text(`Halaman ${data.pageNumber} dari ${pageCount}`, pw / 2, doc.internal.pageSize.getHeight() - 10, { align: 'center' });
-      },
     });
 
     // ─── Tanggal cetak ──────────────────────────
@@ -308,6 +303,7 @@ export default function ProjectDetail() {
       pw - 14, finalY, { align: 'right' }
     );
 
+    addPageNumbers(doc);
     doc.save(`laporan-proyek-${project.name.toLowerCase().replace(/\s+/g, '-')}.pdf`);
   };
 

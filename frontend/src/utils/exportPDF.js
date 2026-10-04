@@ -3,6 +3,24 @@ import autoTable from 'jspdf-autotable';
 import { STORE_INFO } from './constants';
 
 /**
+ * Write "Halaman X dari Y" on every page. Call this after all content is drawn,
+ * so the total page count is final (didDrawPage only knows the pages so far).
+ *
+ * @param {jsPDF} doc
+ */
+export function addPageNumbers(doc) {
+  const pageCount = doc.internal.getNumberOfPages();
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  for (let i = 1; i <= pageCount; i++) {
+    doc.setPage(i);
+    doc.setFontSize(8);
+    doc.setFont(undefined, 'normal');
+    doc.text(`Halaman ${i} dari ${pageCount}`, pageWidth / 2, pageHeight - 10, { align: 'center' });
+  }
+}
+
+/**
  * Export table data to PDF (A4 format).
  *
  * @param {string} title - Report title
@@ -82,19 +100,9 @@ export function exportTableToPDF(title, headers, data, filename = 'laporan.pdf',
       overflow: 'linebreak',
     },
     margin: { left: 14, right: 14 },
-    didDrawPage: (data) => {
-      // Footer: page numbers
-      const pageCount = doc.internal.getNumberOfPages();
-      doc.setFontSize(8);
-      doc.setFont(undefined, 'normal');
-      doc.text(
-        `Halaman ${data.pageNumber} dari ${pageCount}`,
-        pageWidth / 2,
-        doc.internal.pageSize.getHeight() - 10,
-        { align: 'center' }
-      );
-    },
   });
+
+  addPageNumbers(doc);
 
   doc.save(filename);
 }
