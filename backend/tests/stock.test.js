@@ -66,6 +66,12 @@ describe('GET /api/stock', () => {
       .set('Authorization', `Bearer ${adminToken}`);
 
     expect(res.status).toBe(200);
+    const { where } = mockPrisma.product.findMany.mock.calls[0][0];
+    // Day boundaries must be in WIB (+07:00), independent of server timezone
+    expect(where.stockMovements.some.createdAt).toEqual({
+      gte: new Date('2026-03-01T00:00:00+07:00'),
+      lte: new Date('2026-03-22T23:59:59.999+07:00'),
+    });
   });
 
   test('should support category filter', async () => {
@@ -156,5 +162,66 @@ describe('POST /api/stock/adjustment', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
+  });
+
+  test('should reject negative quantity', async () => {
+    mockPrisma.product.findUnique.mockResolvedValue(sampleStock);
+    mockPrisma.stockMovement.create.mockResolvedValue({ id: 'sm-1' });
+
+    const res = await request(app)
+      .post('/api/stock/adjustment')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ productId: 'prod-1', quantity: -5 });
+
+    expect(res.status).toBe(400);
+    expect(mockPrisma.product.update).not.toHaveBeenCalled();
+  });
+
+  test('variant adjustment changes product total by the variant delta', async () => {
+    // product total 100 = variant A 30 + others 70; set variant A to 40
+    mockPrisma.product.findUnique.mockResolvedValue({ ...sampleStock, stock: 100, unitId: null });
+    mockPrisma.productVariant.findUnique.mockResolvedValue({ id: 'var-1', productId: 'prod-1', stock: 30 });
+    mockPrisma.productVariant.update.mockResolvedValue({});
+    mockPrisma.product.update.mockResolvedValue({});
+    mockPrisma.stockMovement.create.mockResolvedValue({ id: 'sm-1', productId: 'prod-1' });
+    mockPrisma.auditLog.create.mockResolvedValue({});
+
+    const res = await request(app)
+      .post('/api/stock/adjustment')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ productId: 'prod-1', variantId: 'var-1', quantity: 40 });
+
+    expect(res.status).toBe(200);
+    expect(mockPrisma.product.update).toHaveBeenCalledWith({ where: { id: 'prod-1' }, data: { stock: 110 } });
+    expect(mockPrisma.productVariant.update).toHaveBeenCalledWith({ where: { id: 'var-1' }, data: { stock: 40 } });
+    expect(mockPrisma.stockMovement.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ quantity: 10, previousStock: 100, newStock: 110 }) })
+    );
+  });
+
+  test('variant adjustment rejects a variant of another product', async () => {
+    mockPrisma.product.findUnique.mockResolvedValue({ ...sampleStock, stock: 100, unitId: null });
+    mockPrisma.productVariant.findUnique.mockResolvedValue({ id: 'var-9', productId: 'prod-9', stock: 5 });
+
+    const res = await request(app)
+      .post('/api/stock/adjustment')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ productId: 'prod-1', variantId: 'var-9', quantity: 40 });
+
+    expect(res.status).toBe(404);
+    expect(mockPrisma.product.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('stock.service addMovement', () => {
+  const stockService = require('../src/services/stock.service');
+
+  test('rejects negative quantity for ADJUSTMENT at service level', async () => {
+    mockPrisma.product.findUnique.mockResolvedValue({ ...sampleStock, stock: 100, unitId: null });
+
+    await expect(stockService.addMovement({
+      productId: 'prod-1', quantity: -1, movementType: 'ADJUSTMENT', userId: 'u-1',
+    })).rejects.toMatchObject({ status: 400 });
+    expect(mockPrisma.product.update).not.toHaveBeenCalled();
   });
 });

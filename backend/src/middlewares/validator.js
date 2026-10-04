@@ -128,6 +128,41 @@ const validateTransaction = [
   body('items.*.price')
     .notEmpty().withMessage('Harga wajib diisi pada setiap item')
     .isFloat({ min: 0 }).withMessage('Harga harus berupa angka positif'),
+  body('items.*.discount')
+    .optional({ values: 'null' })
+    .custom((value, { req, path }) => {
+      const num = Number(value);
+      if (value === '' || isNaN(num) || num < 0) {
+        throw new Error('Diskon item harus berupa angka positif');
+      }
+      const match = /^items\[(\d+)\]/.exec(path);
+      const item = match ? req.body.items[Number(match[1])] : null;
+      if (item && num > Number(item.quantity) * Number(item.price)) {
+        throw new Error('Diskon item tidak boleh melebihi subtotal item');
+      }
+      return true;
+    }),
+  body('discount')
+    .optional({ values: 'null' })
+    .custom((value) => {
+      const num = Number(value);
+      if (value === '' || isNaN(num) || num < 0) throw new Error('Diskon harus berupa angka positif');
+      return true;
+    }),
+  body('tax')
+    .optional({ values: 'null' })
+    .custom((value) => {
+      const num = Number(value);
+      if (value === '' || isNaN(num) || num < 0) throw new Error('Pajak harus berupa angka positif');
+      return true;
+    }),
+  body('paidAmount')
+    .optional({ values: 'null' })
+    .custom((value) => {
+      const num = Number(value);
+      if (value === '' || isNaN(num) || num < 0) throw new Error('Jumlah bayar harus berupa angka positif');
+      return true;
+    }),
   handleValidationErrors,
 ];
 

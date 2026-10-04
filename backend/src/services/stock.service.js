@@ -10,6 +10,10 @@ const formatWIB = (date, fmt) => {
   return format(wib, fmt);
 };
 
+// Day boundaries in WIB (+07:00) for 'yyyy-MM-dd'; full ISO strings are used as-is
+const wibDayStart = (d) => (String(d).includes('T') ? new Date(d) : new Date(`${d}T00:00:00+07:00`));
+const wibDayEnd = (d) => (String(d).includes('T') ? new Date(d) : new Date(`${d}T23:59:59.999+07:00`));
+
 /**
  * Get the current stock of a product (or a specific variant).
  * Stock is read directly from the Product / ProductVariant record
@@ -72,12 +76,8 @@ const getAllStock = async ({ page = 1, limit = DEFAULT_PAGE_SIZE, categoryId, se
 
   if (dateFrom || dateTo) {
     const movementWhere = {};
-    if (dateFrom) movementWhere.gte = new Date(dateFrom);
-    if (dateTo) {
-      const end = new Date(dateTo);
-      end.setHours(23, 59, 59, 999);
-      movementWhere.lte = end;
-    }
+    if (dateFrom) movementWhere.gte = wibDayStart(dateFrom);
+    if (dateTo) movementWhere.lte = wibDayEnd(dateTo);
     where.stockMovements = {
       some: { createdAt: movementWhere },
     };
@@ -128,6 +128,9 @@ const getAllStock = async ({ page = 1, limit = DEFAULT_PAGE_SIZE, categoryId, se
  *   OUT        → stock -= quantity
  *   ADJUSTMENT → stock is SET to quantity (delta recorded)
  *   OPNAME     → stock is SET to quantity (delta recorded)
+ *
+ * With variantId, ADJUSTMENT/OPNAME set the VARIANT stock to quantity and the
+ * product total stock changes by the same delta (new - old variant stock).
  */
 const addMovement = async ({ productId, variantId, unitId, quantity, movementType, referenceType, referenceId, notes, userId }) => {
   return prisma.$transaction(async (tx) => {
@@ -150,26 +153,46 @@ const addMovement = async ({ productId, variantId, unitId, quantity, movementTyp
       }
     }
 
+    if (!Number.isFinite(convertedQty) || convertedQty < 0) {
+      throw new AppError('Jumlah stok tidak boleh negatif', 400);
+    }
+
+    const isAbsolute = movementType === 'ADJUSTMENT' || movementType === 'OPNAME';
+
+    // Lock & read the variant first (when given) so absolute adjustments can
+    // be applied to the product total as a delta of the variant stock.
+    let variant = null;
+    if (variantId) {
+      await tx.$queryRaw`SELECT id FROM "product_variants" WHERE id = ${variantId} FOR UPDATE`;
+      variant = await tx.productVariant.findUnique({ where: { id: variantId } });
+      if (isAbsolute && (!variant || (variant.productId && variant.productId !== productId))) {
+        throw new AppError('Varian produk tidak ditemukan', 404);
+      }
+    }
+
     const previousStock = product.stock;
-    let newStock;
+    let delta;
 
     switch (movementType) {
       case 'IN':
-        newStock = previousStock + convertedQty;
+        delta = convertedQty;
         break;
       case 'OUT':
-        newStock = previousStock - convertedQty;
-        if (newStock < 0) {
-          throw new AppError('Stok tidak mencukupi', 400);
-        }
+        delta = -convertedQty;
         break;
       case 'ADJUSTMENT':
       case 'OPNAME':
-        // quantity = the new absolute stock value; we record the delta
-        newStock = convertedQty;
+        // quantity = the new absolute stock value (of the variant if given,
+        // otherwise of the product); we record the delta
+        delta = variant ? convertedQty - variant.stock : convertedQty - previousStock;
         break;
       default:
         throw new AppError('Tipe pergerakan stok tidak valid', 400);
+    }
+
+    const newStock = previousStock + delta;
+    if (newStock < 0) {
+      throw new AppError('Stok tidak mencukupi', 400);
     }
 
     // Record the movement
@@ -177,9 +200,7 @@ const addMovement = async ({ productId, variantId, unitId, quantity, movementTyp
       data: {
         productId,
         type: movementType,
-        quantity: movementType === 'ADJUSTMENT' || movementType === 'OPNAME'
-          ? convertedQty - previousStock
-          : convertedQty,
+        quantity: isAbsolute ? delta : convertedQty,
         previousStock,
         newStock,
         referenceType: referenceType || null,
@@ -196,28 +217,12 @@ const addMovement = async ({ productId, variantId, unitId, quantity, movementTyp
     });
 
     // Also update variant stock if specified
-    if (variantId) {
-      await tx.$queryRaw`SELECT id FROM "product_variants" WHERE id = ${variantId} FOR UPDATE`;
-      const variant = await tx.productVariant.findUnique({ where: { id: variantId } });
-      if (variant) {
-        let variantNewStock;
-        switch (movementType) {
-          case 'IN':
-            variantNewStock = variant.stock + convertedQty;
-            break;
-          case 'OUT':
-            variantNewStock = variant.stock - convertedQty;
-            break;
-          case 'ADJUSTMENT':
-          case 'OPNAME':
-            variantNewStock = convertedQty;
-            break;
-        }
-        await tx.productVariant.update({
-          where: { id: variantId },
-          data: { stock: variantNewStock },
-        });
-      }
+    if (variant) {
+      const variantNewStock = isAbsolute ? convertedQty : variant.stock + delta;
+      await tx.productVariant.update({
+        where: { id: variantId },
+        data: { stock: variantNewStock },
+      });
     }
 
     return movement;
@@ -305,6 +310,41 @@ const getStockHistory = async (productId, { startDate, endDate, page = 1, limit 
 };
 
 /**
+ * List stock opname sessions with optional search (opname number) and
+ * created-date range (yyyy-MM-dd, interpreted in WIB).
+ */
+const getAllOpname = async ({ page = 1, limit = DEFAULT_PAGE_SIZE, search, dateFrom, dateTo } = {}) => {
+  const where = {};
+
+  if (search) {
+    where.opnameNumber = { contains: search, mode: 'insensitive' };
+  }
+  if (dateFrom || dateTo) {
+    where.createdAt = {};
+    if (dateFrom) where.createdAt.gte = wibDayStart(dateFrom);
+    if (dateTo) where.createdAt.lte = wibDayEnd(dateTo);
+  }
+
+  const skip = (page - 1) * limit;
+
+  const [data, total] = await Promise.all([
+    prisma.stockOpname.findMany({
+      where,
+      include: {
+        creator: { select: { id: true, fullName: true } },
+        _count: { select: { items: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+      skip,
+      take: limit,
+    }),
+    prisma.stockOpname.count({ where }),
+  ]);
+
+  return { data, total, page, limit };
+};
+
+/**
  * Create a new stock opname session.
  * Snapshots every active product's current system stock.
  */
@@ -365,27 +405,34 @@ const createOpname = async (userId) => {
  * Update the actual quantity for a single opname item.
  */
 const updateOpnameItem = async (opnameId, itemId, actualQty) => {
-  const opname = await prisma.stockOpname.findUnique({ where: { id: opnameId } });
-  if (!opname) {
-    throw new AppError('Sesi opname tidak ditemukan', 404);
-  }
-  if (opname.status === 'COMPLETED') {
-    throw new AppError('Sesi opname sudah selesai, tidak bisa diubah', 400);
+  if (!Number.isInteger(actualQty) || actualQty < 0) {
+    throw new AppError('Stok aktual harus berupa bilangan bulat minimal 0', 400);
   }
 
-  const item = await prisma.stockOpnameItem.findUnique({ where: { id: itemId } });
-  if (!item || item.stockOpnameId !== opnameId) {
-    throw new AppError('Item opname tidak ditemukan', 404);
-  }
+  return prisma.$transaction(async (tx) => {
+    // Lock the opname row so this cannot interleave with completeOpname
+    await tx.$queryRaw`SELECT id FROM "stock_opnames" WHERE id = ${opnameId} FOR UPDATE`;
 
-  const difference = actualQty - item.systemStock;
+    const opname = await tx.stockOpname.findUnique({ where: { id: opnameId } });
+    if (!opname) {
+      throw new AppError('Sesi opname tidak ditemukan', 404);
+    }
+    if (opname.status === 'COMPLETED') {
+      throw new AppError('Sesi opname sudah selesai, tidak bisa diubah', 400);
+    }
 
-  const updated = await prisma.stockOpnameItem.update({
-    where: { id: itemId },
-    data: { actualStock: actualQty, difference },
+    const item = await tx.stockOpnameItem.findUnique({ where: { id: itemId } });
+    if (!item || item.stockOpnameId !== opnameId) {
+      throw new AppError('Item opname tidak ditemukan', 404);
+    }
+
+    const difference = actualQty - item.systemStock;
+
+    return tx.stockOpnameItem.update({
+      where: { id: itemId },
+      data: { actualStock: actualQty, difference },
+    });
   });
-
-  return updated;
 };
 
 /**
@@ -394,19 +441,30 @@ const updateOpnameItem = async (opnameId, itemId, actualQty) => {
  * and updates the product stock.
  */
 const completeOpname = async (opnameId, userId) => {
-  const opname = await prisma.stockOpname.findUnique({
-    where: { id: opnameId },
-    include: { items: true },
-  });
-
-  if (!opname) {
-    throw new AppError('Sesi opname tidak ditemukan', 404);
-  }
-  if (opname.status === 'COMPLETED') {
-    throw new AppError('Sesi opname sudah selesai', 400);
-  }
-
   const result = await prisma.$transaction(async (tx) => {
+    // Claim the opname atomically: only one concurrent request can flip the
+    // status. Any error below (e.g. negative stock) rolls this back too.
+    const claimed = await tx.stockOpname.updateMany({
+      where: { id: opnameId, status: { not: 'COMPLETED' } },
+      data: {
+        status: 'COMPLETED',
+        completedAt: new Date(),
+        updatedBy: userId,
+      },
+    });
+
+    if (!claimed || claimed.count === 0) {
+      const exists = await tx.stockOpname.findUnique({ where: { id: opnameId }, select: { id: true } });
+      if (!exists) throw new AppError('Sesi opname tidak ditemukan', 404);
+      throw new AppError('Sesi opname sudah selesai', 400);
+    }
+
+    // Read items inside the transaction (after the claim)
+    const opname = await tx.stockOpname.findUnique({
+      where: { id: opnameId },
+      include: { items: true },
+    });
+
     // Process each item that has a difference
     const adjustments = [];
     for (const item of opname.items) {
@@ -451,14 +509,9 @@ const completeOpname = async (opnameId, userId) => {
       }
     }
 
-    // Mark opname as completed
-    const completed = await tx.stockOpname.update({
+    // Opname was already marked COMPLETED above; return it with items
+    const completed = await tx.stockOpname.findUnique({
       where: { id: opnameId },
-      data: {
-        status: 'COMPLETED',
-        completedAt: new Date(),
-        updatedBy: userId,
-      },
       include: {
         items: {
           include: {
@@ -537,6 +590,7 @@ module.exports = {
   adjustStock,
   checkLowStock,
   getStockHistory,
+  getAllOpname,
   createOpname,
   updateOpnameItem,
   completeOpname,
