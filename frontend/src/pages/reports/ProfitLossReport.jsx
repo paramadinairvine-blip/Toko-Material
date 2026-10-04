@@ -8,7 +8,7 @@ import {
 import { reportAPI } from '../../api/endpoints';
 import { Card, Button, Skeleton, CalendarPicker } from '../../components/common';
 import { formatRupiah, formatNumber } from '../../utils/formatCurrency';
-import { formatTanggal, startOfDayWIB, endOfDayWIB } from '../../utils/formatDate';
+import { formatTanggal, startOfDayWIB, endOfDayWIB, todayWIB } from '../../utils/formatDate';
 import { STORE_INFO } from '../../utils/constants';
 import { exportTableToPDF } from '../../utils/exportPDF';
 import { exportToExcel } from '../../utils/exportExcel';
@@ -52,8 +52,7 @@ function PLRow({ label, value, bold, indent, negative, border }) {
 
 export default function ProfitLossReport() {
   const printRef = useRef();
-  const now = new Date();
-  const today = now.toISOString().slice(0, 10);
+  const today = todayWIB();
 
   const [selectedDate, setSelectedDate] = useState(today);
 
