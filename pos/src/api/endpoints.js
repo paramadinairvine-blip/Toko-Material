@@ -11,6 +11,7 @@ export const authAPI = {
 // ==================== Product ====================
 export const productAPI = {
   getAll: (params) => api.get('/products', { params }),
+  getById: (id) => api.get(`/products/${id}`),
   getByBarcode: (barcode) => api.get(`/products/barcode/${barcode}`),
 };
 

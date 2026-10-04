@@ -1,13 +1,16 @@
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { HiArrowLeft, HiTrash, HiRefresh, HiClock, HiShoppingCart } from 'react-icons/hi';
 import toast from 'react-hot-toast';
 import useHoldStore from '../stores/holdStore';
 import useCartStore from '../stores/cartStore';
+import { productAPI } from '../api/endpoints';
 import { formatRupiah } from '../utils/formatCurrency';
 import { EmptyState } from '../components/common';
 
 export default function HoldList() {
   const navigate = useNavigate();
+  const [restoringId, setRestoringId] = useState(null);
   const { holds, removeHold, clearAllHolds } = useHoldStore();
   const { items: cartItems, clearCart } = useCartStore();
   const addItem = useCartStore((s) => s.addItem);
@@ -15,7 +18,8 @@ export default function HoldList() {
   const setNotes = useCartStore((s) => s.setNotes);
   const setCustomerName = useCartStore((s) => s.setCustomerName);
 
-  const handleRestore = (hold) => {
+  const handleRestore = async (hold) => {
+    if (restoringId) return;
     if (cartItems.length > 0) {
       const confirmed = window.confirm(
         'Daftar pembelian saat ini masih ada isinya. Lanjutkan akan mengganti isi saat ini. Lanjutkan?'
@@ -23,18 +27,74 @@ export default function HoldList() {
       if (!confirmed) return;
     }
 
+    setRestoringId(hold.id);
+
+    // Fetch fresh product data (price, stock, units) — the held snapshot may be stale
+    const productIds = [...new Set(hold.items.map((item) => item.productId))];
+    const freshProducts = {};
+    await Promise.all(
+      productIds.map(async (id) => {
+        try {
+          const { data: res } = await productAPI.getById(id);
+          if (res?.data) freshProducts[id] = res.data;
+        } catch {
+          // Product deleted or unreachable — handled as a failed item below
+        }
+      })
+    );
+
     clearCart();
 
-    // Restore items with correct unit info and quantity
+    const failed = [];
+    let priceUpdated = 0;
+
+    // Restore items with correct unit info, current price and quantity
     hold.items.forEach((item) => {
-      const unitInfo = item.unitId ? {
-        unitId: item.unitId,
-        unitName: item.unitName,
-        unitPrice: item.unitPrice,
-      } : null;
-      addItem(item.product, unitInfo);
+      const heldName = item.product?.name || 'Produk';
+      const product = freshProducts[item.productId];
+      if (!product || product.isActive === false) {
+        failed.push(`${heldName} (produk tidak tersedia)`);
+        return;
+      }
+
+      const sellPrice = parseFloat(product.sellPrice) || 0;
+      let unitInfo = null;
+      let conversionFactor = 1;
+      if (item.unitId && item.unitId !== product.unitId) {
+        const pu = (product.productUnits || []).find((u) => u.unitId === item.unitId);
+        if (!pu) {
+          failed.push(`${product.name} (satuan ${item.unitName} tidak tersedia)`);
+          return;
+        }
+        conversionFactor = parseFloat(pu.conversionFactor) || 1;
+        unitInfo = {
+          unitId: item.unitId,
+          unitName: pu.unit?.abbreviation || item.unitName,
+          unitPrice: sellPrice * conversionFactor,
+          conversionFactor,
+        };
+      }
+
+      // Validate the full held quantity against current stock
+      const cart = useCartStore.getState();
+      const stock = product.stock || 0;
+      if (cart.getBaseQtyByProduct(product.id) + item.quantity * conversionFactor > stock) {
+        const baseUnit = product.unitOfMeasure?.abbreviation || product.unit || 'pcs';
+        failed.push(`${product.name} (stok sisa ${stock} ${baseUnit})`);
+        return;
+      }
+
+      const result = addItem(product, unitInfo);
+      if (result?.error) {
+        failed.push(`${product.name} (stok tidak cukup)`);
+        return;
+      }
+
+      const newPrice = unitInfo ? unitInfo.unitPrice : sellPrice;
+      if (Math.abs(newPrice - (Number(item.unitPrice) || 0)) >= 1) priceUpdated += 1;
+
       // Set correct quantity using cartKey
-      const cartKey = item.cartKey || `${item.productId}_${item.unitId || 'base'}`;
+      const cartKey = `${product.id}_${(unitInfo?.unitId ?? product.unitId) || 'base'}`;
       useCartStore.getState().updateQuantity(cartKey, item.quantity);
     });
 
@@ -43,11 +103,23 @@ export default function HoldList() {
     if (hold.notes) setNotes(hold.notes);
     if (hold.customerName) setCustomerName(hold.customerName);
 
-    // Remove from hold list
-    removeHold(hold.id);
+    setRestoringId(null);
 
-    toast.success('Transaksi dipulihkan', { duration: 2000, position: 'bottom-center' });
-    navigate('/kasir');
+    if (priceUpdated > 0) {
+      toast(`Harga ${priceUpdated} item diperbarui ke harga terbaru`, { duration: 4000, position: 'bottom-center' });
+    }
+
+    if (failed.length > 0) {
+      // Keep the hold so nothing is lost; the cashier can fix stock and restore again
+      toast.error(
+        `Sebagian item tidak dapat dipulihkan (hold tetap disimpan):\n${failed.join('\n')}`,
+        { duration: 8000, position: 'bottom-center' }
+      );
+    } else {
+      removeHold(hold.id);
+      toast.success('Transaksi dipulihkan', { duration: 2000, position: 'bottom-center' });
+    }
+    if (useCartStore.getState().items.length > 0) navigate('/kasir');
   };
 
   const handleDeleteHold = (holdId) => {
@@ -178,10 +250,11 @@ export default function HoldList() {
                 <div className="px-4 py-3 bg-gray-50 border-t border-gray-100 flex items-center gap-2">
                   <button
                     onClick={() => handleRestore(hold)}
-                    className="flex-1 flex items-center justify-center gap-2 py-2 px-4 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors"
+                    disabled={!!restoringId}
+                    className="flex-1 flex items-center justify-center gap-2 py-2 px-4 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                   >
-                    <HiRefresh className="w-4 h-4" />
-                    Pulihkan
+                    <HiRefresh className={`w-4 h-4 ${restoringId === hold.id ? 'animate-spin' : ''}`} />
+                    {restoringId === hold.id ? 'Memulihkan...' : 'Pulihkan'}
                   </button>
                   <button
                     onClick={() => handleDeleteHold(hold.id)}
