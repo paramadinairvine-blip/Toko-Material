@@ -16,7 +16,6 @@ const emptyItem = () => ({
   unitId: '',
   quantity: '1',
   unitPrice: '',
-  discount: '0',
   product: null,
 });
 
@@ -81,7 +80,6 @@ export default function PurchaseOrderForm() {
             unitId: item.unitId || '',
             quantity: item.quantity?.toString() || '1',
             unitPrice: (item.unitPrice ?? item.price)?.toString() || '',
-            discount: item.discount?.toString() || '0',
             product: item.product || null,
           }))
         );
@@ -137,6 +135,20 @@ export default function PurchaseOrderForm() {
     return 'Pcs';
   };
 
+  // Buy price for the chosen unit: product.buyPrice (per base unit) × conversion factor
+  const getUnitBuyPrice = (product, unitId) => {
+    if (!product) return '';
+    const base = parseFloat(product.buyPrice) || 0;
+    const baseUnitId = product.unitOfMeasure?.id || product.unitId || '';
+    let factor = 1;
+    if (unitId && unitId !== baseUnitId) {
+      const pu = (product.productUnits || []).find((u) => (u.unit?.id || u.unitId) === unitId);
+      factor = parseFloat(pu?.conversionFactor) || 1;
+    }
+    const price = base * factor;
+    return price > 0 ? price.toString() : '';
+  };
+
   const updateItem = (index, field, value) => {
     setIsDirty(true);
     setItems((prev) => {
@@ -148,7 +160,12 @@ export default function PurchaseOrderForm() {
         updated[index].product = product;
         updated[index].variantId = '';
         updated[index].unitId = product?.unitOfMeasure?.id || product?.unitId || '';
-        updated[index].unitPrice = product?.buyPrice?.toString() || '';
+        updated[index].unitPrice = getUnitBuyPrice(product, updated[index].unitId);
+      }
+
+      if (field === 'unitId') {
+        const product = updated[index].product || getProductById(updated[index].productId);
+        updated[index].unitPrice = getUnitBuyPrice(product, value);
       }
 
       return updated;
@@ -165,9 +182,7 @@ export default function PurchaseOrderForm() {
   const calcItemTotal = (item) => {
     const qty = parseFloat(item.quantity) || 0;
     const price = parseFloat(item.unitPrice) || 0;
-    const disc = Math.min(Math.max(parseFloat(item.discount) || 0, 0), 100);
-    const subtotal = qty * price;
-    return subtotal - (subtotal * disc / 100);
+    return qty * price;
   };
 
   const grandTotal = items.reduce((sum, item) => sum + calcItemTotal(item), 0);
@@ -251,7 +266,6 @@ export default function PurchaseOrderForm() {
         unitId: item.unitId || null,
         quantity: parseFloat(item.quantity),
         price: parseFloat(item.unitPrice),
-        discount: parseFloat(item.discount) || 0,
       })),
   });
 
@@ -350,7 +364,6 @@ export default function PurchaseOrderForm() {
                   <th className="text-left px-3 py-2.5 text-xs font-bold text-gray-500 uppercase tracking-wider w-28">Satuan</th>
                   <th className="text-center px-3 py-2.5 text-xs font-bold text-gray-500 uppercase tracking-wider w-20">Qty</th>
                   <th className="text-center px-3 py-2.5 text-xs font-bold text-gray-500 uppercase tracking-wider w-28">Harga</th>
-                  <th className="text-center px-3 py-2.5 text-xs font-bold text-gray-500 uppercase tracking-wider w-20">Disk%</th>
                   <th className="text-right px-3 py-2.5 text-xs font-bold text-gray-500 uppercase tracking-wider w-28">Subtotal</th>
                   <th className="w-8"></th>
                 </tr>
@@ -394,20 +407,6 @@ export default function PurchaseOrderForm() {
                       <div className="px-2 py-1.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-center text-gray-700">
                         {parseFloat(item.unitPrice) > 0 ? `Rp ${parseFloat(item.unitPrice).toLocaleString('id-ID')}` : '-'}
                       </div>
-                    </td>
-                    <td className="px-3 py-2">
-                      <input
-                        type="number"
-                        min="0"
-                        max="100"
-                        value={item.discount}
-                        onChange={(e) => {
-                          const val = Math.min(Math.max(parseFloat(e.target.value) || 0, 0), 100);
-                          updateItem(idx, 'discount', String(val));
-                        }}
-                        className="w-full px-2 py-1.5 border border-gray-300 rounded-lg text-sm text-center focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-                        placeholder="0"
-                      />
                     </td>
                     <td className="px-3 py-2 text-right font-medium text-gray-700 whitespace-nowrap">
                       {formatRupiah(calcItemTotal(item))}
