@@ -133,6 +133,71 @@ const validateTransaction = [
 
 // ==================== Purchase Order ====================
 
+// Accept both 'price' and 'unitPrice' from frontend
+const remapPOItemPrice = (req, _res, next) => {
+  if (Array.isArray(req.body?.items)) {
+    req.body.items = req.body.items.map((item) => {
+      if (item && item.unitPrice !== undefined && item.price === undefined) {
+        item.price = item.unitPrice;
+        delete item.unitPrice;
+      }
+      return item;
+    });
+  }
+  next();
+};
+
+const poItemRules = [
+  body('items.*.productId')
+    .isString().withMessage('Product ID tidak valid')
+    .bail()
+    .trim()
+    .notEmpty().withMessage('Product ID wajib diisi pada setiap item'),
+  body('items.*.unitId')
+    .optional({ values: 'falsy' })
+    .isString().withMessage('Unit ID tidak valid'),
+  body('items.*.quantity')
+    .custom((value) => {
+      if (value === undefined || value === null || value === '') {
+        throw new Error('Jumlah wajib diisi pada setiap item');
+      }
+      const num = Number(value);
+      if (isNaN(num) || num < 1 || !Number.isInteger(num)) {
+        throw new Error('Jumlah harus bilangan bulat minimal 1');
+      }
+      return true;
+    }),
+  remapPOItemPrice,
+  body('items.*.price')
+    .custom((value) => {
+      if (value === undefined || value === null || value === '') {
+        throw new Error('Harga wajib diisi pada setiap item');
+      }
+      const num = Number(value);
+      if (isNaN(num) || num < 0) {
+        throw new Error('Harga harus berupa angka positif');
+      }
+      return true;
+    }),
+];
+
+const validatePurchaseOrderUpdate = [
+  body('supplierId')
+    .optional()
+    .isString().withMessage('Supplier tidak valid')
+    .bail()
+    .trim()
+    .notEmpty().withMessage('Supplier tidak boleh kosong'),
+  body('orderDate')
+    .optional({ values: 'falsy' })
+    .isISO8601().withMessage('Tanggal order tidak valid'),
+  body('items')
+    .optional()
+    .isArray({ min: 1 }).withMessage('Item purchase order harus berupa array minimal 1 item'),
+  ...poItemRules,
+  handleValidationErrors,
+];
+
 const validatePurchaseOrder = [
   body('supplierId')
     .notEmpty().withMessage('Supplier wajib diisi'),
@@ -151,19 +216,7 @@ const validatePurchaseOrder = [
       }
       return true;
     }),
-  // Accept both 'price' and 'unitPrice' from frontend
-  (req, _res, next) => {
-    if (Array.isArray(req.body?.items)) {
-      req.body.items = req.body.items.map((item) => {
-        if (item.unitPrice !== undefined && item.price === undefined) {
-          item.price = item.unitPrice;
-          delete item.unitPrice;
-        }
-        return item;
-      });
-    }
-    next();
-  },
+  remapPOItemPrice,
   body('items.*.price')
     .custom((value) => {
       if (value === undefined || value === null || value === '') {
@@ -243,6 +296,7 @@ module.exports = {
   validateProduct,
   validateTransaction,
   validatePurchaseOrder,
+  validatePurchaseOrderUpdate,
   validateSupplier,
   validateProject,
   validateStockOpname,

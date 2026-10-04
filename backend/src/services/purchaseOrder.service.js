@@ -256,10 +256,15 @@ const update = async (id, data, userId) => {
 
     // Replace items if provided
     if (items !== undefined) {
+      if (!Array.isArray(items) || items.length === 0) {
+        throw new AppError('Item purchase order minimal 1 item', 400);
+      }
+
       await tx.purchaseOrderItem.deleteMany({ where: { purchaseOrderId: id } });
 
       let totalAmount = 0;
-      for (const item of items) {
+      for (const rawItem of items) {
+        const item = { ...rawItem, quantity: Number(rawItem.quantity), price: Number(rawItem.price) };
         const subtotal = item.quantity * item.price;
         totalAmount += subtotal;
 
