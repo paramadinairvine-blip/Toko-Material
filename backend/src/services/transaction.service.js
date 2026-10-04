@@ -221,6 +221,17 @@ const create = async (data, userId) => {
   // Everything runs inside a single transaction with row-level locking
   // to prevent race conditions on stock checks & deductions.
   const transaction = await prisma.$transaction(async (tx) => {
+    // Pengeluaran hanya boleh dibebankan ke proyek yang masih aktif
+    if (header.projectId) {
+      const project = await tx.project.findUnique({ where: { id: header.projectId } });
+      if (!project || project.isActive === false) {
+        throw new AppError('Proyek tidak ditemukan', 404);
+      }
+      if (['COMPLETED', 'CANCELLED'].includes(project.status)) {
+        throw new AppError('Proyek sudah selesai atau dibatalkan, transaksi tidak bisa dibebankan ke proyek ini', 400);
+      }
+    }
+
     // ── 1. Lock & fetch products using SELECT ... FOR UPDATE ──
 
     // Step 1a: Lock product rows (FOR UPDATE not allowed with GROUP BY)

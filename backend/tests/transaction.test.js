@@ -100,6 +100,22 @@ describe('POST /api/transactions money validation', () => {
     .set('Authorization', `Bearer ${kasirToken}`)
     .send(body);
 
+  test('rejects charging a completed or cancelled project', async () => {
+    setupCreate();
+    mockPrisma.project.findUnique.mockResolvedValue({ id: 'proj-1', status: 'COMPLETED', isActive: true });
+    const res = await post(posPayload({ projectId: 'proj-1' }));
+    expect(res.status).toBe(400);
+    expect(mockPrisma.transaction.create).not.toHaveBeenCalled();
+  });
+
+  test('accepts charging an active project', async () => {
+    setupCreate();
+    mockPrisma.project.findUnique.mockResolvedValue({ id: 'proj-1', status: 'IN_PROGRESS', isActive: true });
+    mockPrisma.project.update.mockResolvedValue({});
+    const res = await post(posPayload({ projectId: 'proj-1' }));
+    expect(res.status).toBe(201);
+  });
+
   test('accepts the POS checkout payload', async () => {
     setupCreate();
     const res = await post(posPayload());
