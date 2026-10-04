@@ -66,6 +66,86 @@ describe('POST /api/transactions', () => {
   });
 });
 
+describe('POST /api/transactions money validation', () => {
+  const product = { id: 'p-1', name: 'Semen', sellPrice: 10000, stock: 100, productUnits: [] };
+
+  const setupCreate = () => {
+    mockPrisma.product.findMany.mockResolvedValue([{ ...product }]);
+    mockPrisma.transaction.findFirst.mockResolvedValue(null);
+    mockPrisma.transaction.create.mockResolvedValue({ id: 'tx-new' });
+    mockPrisma.transactionItem.createMany.mockResolvedValue({ count: 1 });
+    mockPrisma.stockMovement.create.mockResolvedValue({});
+    mockPrisma.product.update.mockResolvedValue({});
+    mockPrisma.transaction.findUnique.mockResolvedValue({ id: 'tx-new', transactionNumber: 'TRX-1', type: 'CASH', total: 20000, items: [] });
+    mockPrisma.auditLog.create.mockResolvedValue({});
+    mockPrisma.user.findMany.mockResolvedValue([]);
+    mockPrisma.notification.createMany.mockResolvedValue({});
+  };
+
+  // Same shape as pos/src/pages/Checkout.jsx
+  const posPayload = (overrides = {}) => ({
+    type: 'CASH',
+    items: [{ productId: 'p-1', quantity: 2, price: 10000, unitId: null }],
+    discount: 0,
+    paidAmount: 20000,
+    notes: undefined,
+    customerName: undefined,
+    customerPhone: undefined,
+    kepanitiaan: undefined,
+    ...overrides,
+  });
+
+  const post = (body) => request(app)
+    .post('/api/transactions')
+    .set('Authorization', `Bearer ${kasirToken}`)
+    .send(body);
+
+  test('accepts the POS checkout payload', async () => {
+    setupCreate();
+    const res = await post(posPayload());
+    expect(res.status).toBe(201);
+    expect(mockPrisma.transaction.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ total: 20000, paidAmount: 20000, changeAmount: 0 }) })
+    );
+  });
+
+  test('rejects negative item discount', async () => {
+    const res = await post(posPayload({ items: [{ productId: 'p-1', quantity: 2, price: 10000, discount: -5000 }] }));
+    expect(res.status).toBe(422);
+    expect(res.body.errors.some((e) => e.field === 'items[0].discount')).toBe(true);
+  });
+
+  test('rejects item discount larger than qty * price', async () => {
+    const res = await post(posPayload({ items: [{ productId: 'p-1', quantity: 2, price: 10000, discount: 25000 }] }));
+    expect(res.status).toBe(422);
+    expect(res.body.errors.some((e) => e.field === 'items[0].discount')).toBe(true);
+  });
+
+  test('rejects negative tax and negative header discount', async () => {
+    const res = await post(posPayload({ tax: -100, discount: -100 }));
+    expect(res.status).toBe(422);
+    expect(res.body.errors.some((e) => e.field === 'tax')).toBe(true);
+    expect(res.body.errors.some((e) => e.field === 'discount')).toBe(true);
+  });
+
+  test('rejects CASH transaction when paidAmount is less than total', async () => {
+    setupCreate();
+    const res = await post(posPayload({ paidAmount: 15000 }));
+    expect(res.status).toBe(400);
+    expect(res.body.message).toContain('pembayaran kurang');
+    expect(mockPrisma.transaction.create).not.toHaveBeenCalled();
+  });
+
+  test('coerces string money fields to numbers', async () => {
+    setupCreate();
+    const res = await post(posPayload({ discount: '5000', paidAmount: '15000' }));
+    expect(res.status).toBe(201);
+    expect(mockPrisma.transaction.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ discount: 5000, total: 15000, paidAmount: 15000 }) })
+    );
+  });
+});
+
 describe('PUT /api/transactions/:id/cancel', () => {
   const baseTrx = {
     id: 'tx-1', status: 'COMPLETED', total: 100000, projectId: 'proj-1',

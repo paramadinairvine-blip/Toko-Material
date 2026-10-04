@@ -287,10 +287,14 @@ const create = async (data, userId) => {
       }
       remainingStock[item.productId] -= qty;
 
-      const itemDiscount = item.discount || 0;
-      const itemSubtotal = item.quantity * item.price - itemDiscount;
+      const itemDiscount = Number(item.discount) || 0;
+      const grossSubtotal = Number(item.quantity) * sentPrice;
+      if (itemDiscount < 0 || itemDiscount > grossSubtotal) {
+        throw new AppError(`Diskon item ${product.name} tidak valid`, 400);
+      }
+      const itemSubtotal = grossSubtotal - itemDiscount;
       subtotal += itemSubtotal;
-      processedItems.push({ ...item, discount: itemDiscount, subtotal: itemSubtotal, baseQty: qty });
+      processedItems.push({ ...item, price: sentPrice, discount: itemDiscount, subtotal: itemSubtotal, baseQty: qty });
     }
 
     if (priceChanges.length > 0) {
@@ -304,10 +308,20 @@ const create = async (data, userId) => {
       throw err;
     }
 
-    const discount = Math.min(Math.max(header.discount || 0, 0), subtotal);
-    const tax = header.tax || 0;
+    const headerDiscount = Number(header.discount) || 0;
+    const tax = Number(header.tax) || 0;
+    const paidAmount = Number(header.paidAmount) || 0;
+    if (headerDiscount < 0) throw new AppError('Diskon tidak boleh negatif', 400);
+    if (tax < 0) throw new AppError('Pajak tidak boleh negatif', 400);
+    if (paidAmount < 0) throw new AppError('Jumlah bayar tidak boleh negatif', 400);
+
+    const discount = Math.min(headerDiscount, subtotal);
     const total = subtotal - discount + tax;
-    const paidAmount = header.paidAmount || 0;
+
+    // CASH must be paid in full (compare in cents to avoid float noise)
+    if (header.type === 'CASH' && Math.round(paidAmount * 100) < Math.round(total * 100)) {
+      throw new AppError('Jumlah pembayaran kurang dari total transaksi', 400);
+    }
     const changeAmount = paidAmount > total ? paidAmount - total : 0;
 
     // ── 3. Write transaction data ──
