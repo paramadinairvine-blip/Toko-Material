@@ -128,6 +128,9 @@ const getAllStock = async ({ page = 1, limit = DEFAULT_PAGE_SIZE, categoryId, se
  *   OUT        → stock -= quantity
  *   ADJUSTMENT → stock is SET to quantity (delta recorded)
  *   OPNAME     → stock is SET to quantity (delta recorded)
+ *
+ * With variantId, ADJUSTMENT/OPNAME set the VARIANT stock to quantity and the
+ * product total stock changes by the same delta (new - old variant stock).
  */
 const addMovement = async ({ productId, variantId, unitId, quantity, movementType, referenceType, referenceId, notes, userId }) => {
   return prisma.$transaction(async (tx) => {
@@ -150,26 +153,46 @@ const addMovement = async ({ productId, variantId, unitId, quantity, movementTyp
       }
     }
 
+    if (!Number.isFinite(convertedQty) || convertedQty < 0) {
+      throw new AppError('Jumlah stok tidak boleh negatif', 400);
+    }
+
+    const isAbsolute = movementType === 'ADJUSTMENT' || movementType === 'OPNAME';
+
+    // Lock & read the variant first (when given) so absolute adjustments can
+    // be applied to the product total as a delta of the variant stock.
+    let variant = null;
+    if (variantId) {
+      await tx.$queryRaw`SELECT id FROM "product_variants" WHERE id = ${variantId} FOR UPDATE`;
+      variant = await tx.productVariant.findUnique({ where: { id: variantId } });
+      if (isAbsolute && (!variant || (variant.productId && variant.productId !== productId))) {
+        throw new AppError('Varian produk tidak ditemukan', 404);
+      }
+    }
+
     const previousStock = product.stock;
-    let newStock;
+    let delta;
 
     switch (movementType) {
       case 'IN':
-        newStock = previousStock + convertedQty;
+        delta = convertedQty;
         break;
       case 'OUT':
-        newStock = previousStock - convertedQty;
-        if (newStock < 0) {
-          throw new AppError('Stok tidak mencukupi', 400);
-        }
+        delta = -convertedQty;
         break;
       case 'ADJUSTMENT':
       case 'OPNAME':
-        // quantity = the new absolute stock value; we record the delta
-        newStock = convertedQty;
+        // quantity = the new absolute stock value (of the variant if given,
+        // otherwise of the product); we record the delta
+        delta = variant ? convertedQty - variant.stock : convertedQty - previousStock;
         break;
       default:
         throw new AppError('Tipe pergerakan stok tidak valid', 400);
+    }
+
+    const newStock = previousStock + delta;
+    if (newStock < 0) {
+      throw new AppError('Stok tidak mencukupi', 400);
     }
 
     // Record the movement
@@ -177,9 +200,7 @@ const addMovement = async ({ productId, variantId, unitId, quantity, movementTyp
       data: {
         productId,
         type: movementType,
-        quantity: movementType === 'ADJUSTMENT' || movementType === 'OPNAME'
-          ? convertedQty - previousStock
-          : convertedQty,
+        quantity: isAbsolute ? delta : convertedQty,
         previousStock,
         newStock,
         referenceType: referenceType || null,
@@ -196,28 +217,12 @@ const addMovement = async ({ productId, variantId, unitId, quantity, movementTyp
     });
 
     // Also update variant stock if specified
-    if (variantId) {
-      await tx.$queryRaw`SELECT id FROM "product_variants" WHERE id = ${variantId} FOR UPDATE`;
-      const variant = await tx.productVariant.findUnique({ where: { id: variantId } });
-      if (variant) {
-        let variantNewStock;
-        switch (movementType) {
-          case 'IN':
-            variantNewStock = variant.stock + convertedQty;
-            break;
-          case 'OUT':
-            variantNewStock = variant.stock - convertedQty;
-            break;
-          case 'ADJUSTMENT':
-          case 'OPNAME':
-            variantNewStock = convertedQty;
-            break;
-        }
-        await tx.productVariant.update({
-          where: { id: variantId },
-          data: { stock: variantNewStock },
-        });
-      }
+    if (variant) {
+      const variantNewStock = isAbsolute ? convertedQty : variant.stock + delta;
+      await tx.productVariant.update({
+        where: { id: variantId },
+        data: { stock: variantNewStock },
+      });
     }
 
     return movement;

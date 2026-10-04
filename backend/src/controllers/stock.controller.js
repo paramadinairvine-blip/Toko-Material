@@ -58,8 +58,10 @@ const adjustStock = async (req, res) => {
     if (!productId) return errorResponse(res, 'Product ID wajib diisi', 400);
     if (quantity === undefined || quantity === null) return errorResponse(res, 'Jumlah stok wajib diisi', 400);
 
-    const parsedQty = parseInt(quantity);
-    if (isNaN(parsedQty)) return errorResponse(res, 'Jumlah stok harus berupa angka', 400);
+    const parsedQty = Number(quantity);
+    if (quantity === '' || isNaN(parsedQty)) return errorResponse(res, 'Jumlah stok harus berupa angka', 400);
+    if (!Number.isInteger(parsedQty)) return errorResponse(res, 'Jumlah stok harus berupa bilangan bulat', 400);
+    if (parsedQty < 0) return errorResponse(res, 'Jumlah stok tidak boleh negatif', 400);
 
     const movement = await stockService.adjustStock({
       productId,
