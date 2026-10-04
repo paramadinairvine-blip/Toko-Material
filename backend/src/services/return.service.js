@@ -44,6 +44,14 @@ const generateReturnNumber = async (tx) => {
   return `${prefix}${String(seq).padStart(4, '0')}`;
 };
 
+const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+// Item subtotal after item discount (qty * price - discount)
+const itemNetSubtotal = (item) => {
+  if (item.subtotal !== undefined && item.subtotal !== null) return Number(item.subtotal);
+  return item.quantity * Number(item.price) - (Number(item.discount) || 0);
+};
+
 // ─── public API ─────────────────────────────────────────────────────
 
 const getAll = async ({ page = 1, limit = DEFAULT_PAGE_SIZE, search, startDate, endDate } = {}) => {
@@ -116,7 +124,10 @@ const create = async (data, userId) => {
   const { transactionId, reason, items } = data;
 
   const result = await prisma.$transaction(async (tx) => {
-    // 1. Fetch transaction with items
+    // 1. Lock the transaction row so concurrent returns / cancel on the same
+    //    transaction are serialized, then fetch it with items (under lock).
+    await tx.$queryRaw`SELECT id FROM "transactions" WHERE id = ${transactionId} FOR UPDATE`;
+
     const transaction = await tx.transaction.findUnique({
       where: { id: transactionId },
       include: { items: true },
@@ -127,23 +138,39 @@ const create = async (data, userId) => {
       throw new AppError('Hanya transaksi COMPLETED yang bisa diretur', 400);
     }
 
-    // 2. Get already-returned quantities per transaction item
+    // 2. Get already-returned quantities (and base qty) per transaction item
     const existingReturns = await tx.transactionReturnItem.groupBy({
       by: ['transactionItemId'],
       where: { transactionReturn: { transactionId } },
-      _sum: { quantity: true },
+      _sum: { quantity: true, baseQty: true },
     });
 
     const returnedMap = {};
-    for (const r of existingReturns) {
-      returnedMap[r.transactionItemId] = r._sum.quantity || 0;
+    const returnedBaseMap = {};
+    for (const r of existingReturns || []) {
+      returnedMap[r.transactionItemId] = Number(r._sum?.quantity) || 0;
+      returnedBaseMap[r.transactionItemId] = Number(r._sum?.baseQty) || 0;
     }
 
-    // 3. Build item map
+    const refundAgg = await tx.transactionReturn.aggregate({
+      where: { transactionId },
+      _sum: { refundAmount: true },
+    });
+    const alreadyRefunded = Number(refundAgg?._sum?.refundAmount) || 0;
+
+    // 3. Build item map + header discount ratio
+    //    total = subtotal(items) - header discount + tax, so the ratio that
+    //    spreads the header discount over the items is (total - tax) / subtotal.
     const itemMap = {};
+    let itemsSubtotal = 0;
     for (const item of transaction.items) {
       itemMap[item.id] = item;
+      itemsSubtotal += itemNetSubtotal(item);
     }
+    const transactionTotal = Number(transaction.total) || 0;
+    const discountRatio = itemsSubtotal > 0
+      ? Math.max(transactionTotal - (Number(transaction.tax) || 0), 0) / itemsSubtotal
+      : 0;
 
     // 4. Validate and process return items
     let refundAmount = 0;
@@ -155,34 +182,55 @@ const create = async (data, userId) => {
         throw new AppError(`Item transaksi ${ri.transactionItemId} tidak ditemukan`, 400);
       }
 
+      const qty = Number(ri.quantity);
       const alreadyReturned = returnedMap[ri.transactionItemId] || 0;
       const maxReturnable = originalItem.quantity - alreadyReturned;
 
-      if (ri.quantity > maxReturnable) {
+      if (qty > maxReturnable) {
         throw new AppError(
           `Jumlah retur melebihi sisa yang bisa diretur (maks: ${maxReturnable})`,
           400
         );
       }
 
-      // Calculate baseQty proportionally
-      const baseQty = originalItem.baseQty > 0 && originalItem.quantity > 0
-        ? Math.round(ri.quantity * (originalItem.baseQty / originalItem.quantity))
-        : ri.quantity;
+      // Base qty: never exceed what is left; the last return gets the exact remainder
+      const itemBaseQty = originalItem.baseQty > 0 ? originalItem.baseQty : originalItem.quantity;
+      const alreadyReturnedBase = returnedBaseMap[ri.transactionItemId] || 0;
+      const remainingBase = Math.max(itemBaseQty - alreadyReturnedBase, 0);
+      let baseQty;
+      if (qty === maxReturnable) {
+        baseQty = remainingBase;
+      } else {
+        const proportional = originalItem.quantity > 0
+          ? Math.round(qty * (itemBaseQty / originalItem.quantity))
+          : qty;
+        baseQty = Math.min(proportional, remainingBase);
+      }
 
-      const price = Number(originalItem.price);
-      const subtotal = ri.quantity * price;
-      refundAmount += subtotal;
+      // Refund = share of the item's net subtotal (after item & header discount).
+      // Computed cumulatively so the sum over partial returns equals the whole.
+      const itemNet = itemNetSubtotal(originalItem) * discountRatio;
+      const refundedBefore = round2(itemNet * (alreadyReturned / originalItem.quantity));
+      const refundedAfter = round2(itemNet * ((alreadyReturned + qty) / originalItem.quantity));
+      const subtotal = round2(refundedAfter - refundedBefore);
+      refundAmount = round2(refundAmount + subtotal);
+
+      // Account for the same item appearing more than once in this request
+      returnedMap[ri.transactionItemId] = alreadyReturned + qty;
+      returnedBaseMap[ri.transactionItemId] = alreadyReturnedBase + baseQty;
 
       processedItems.push({
         transactionItemId: ri.transactionItemId,
         productId: originalItem.productId,
-        quantity: ri.quantity,
+        quantity: qty,
         baseQty,
         price: originalItem.price,
         subtotal,
       });
     }
+
+    // Cumulative refunds may never exceed the transaction total
+    refundAmount = round2(Math.min(refundAmount, Math.max(transactionTotal - alreadyRefunded, 0)));
 
     // 5. Generate return number
     const returnNumber = await generateReturnNumber(tx);
