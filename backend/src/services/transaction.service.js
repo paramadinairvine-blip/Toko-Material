@@ -420,35 +420,74 @@ const create = async (data, userId) => {
 };
 
 /**
- * Cancel a transaction: set status=CANCELLED, restore all stock.
+ * Cancel a transaction: set status=CANCELLED, restore stock that has not
+ * been returned yet, and revert project.spent by the non-refunded amount.
+ *
+ * Everything (status check, returned quantities, stock writes) happens inside
+ * one DB transaction with the transaction row locked, so a concurrent cancel
+ * or return on the same transaction is serialized.
  */
 const cancel = async (id, userId) => {
-  const existing = await prisma.transaction.findUnique({
-    where: { id },
-    include: { items: true },
-  });
-
-  if (!existing) throw new AppError('Transaksi tidak ditemukan', 404);
-  if (existing.status === 'CANCELLED') {
-    throw new AppError('Transaksi sudah dibatalkan sebelumnya', 400);
-  }
+  let previousStatus;
 
   const transaction = await prisma.$transaction(async (tx) => {
-    // Restore stock for every item using baseQty (already converted to base unit)
+    // Lock the transaction row first (serializes with returns / other cancels)
+    await tx.$queryRaw`SELECT id FROM "transactions" WHERE id = ${id} FOR UPDATE`;
+
+    const existing = await tx.transaction.findUnique({
+      where: { id },
+      include: { items: true },
+    });
+
+    if (!existing) throw new AppError('Transaksi tidak ditemukan', 404);
+    if (existing.status === 'CANCELLED') {
+      throw new AppError('Transaksi sudah dibatalkan sebelumnya', 400);
+    }
+    previousStatus = existing.status;
+
+    // Base qty already returned per transaction item (re-read under lock)
+    const returned = await tx.transactionReturnItem.groupBy({
+      by: ['transactionItemId'],
+      where: { transactionReturn: { transactionId: id } },
+      _sum: { baseQty: true },
+    });
+    const returnedBaseMap = {};
+    for (const r of returned || []) {
+      returnedBaseMap[r.transactionItemId] = Number(r._sum?.baseQty) || 0;
+    }
+
+    const refundAgg = await tx.transactionReturn.aggregate({
+      where: { transactionId: id },
+      _sum: { refundAmount: true },
+    });
+    const totalRefunded = Number(refundAgg?._sum?.refundAmount) || 0;
+
+    // Compute how much to restore per item (only what has not been returned)
+    const restores = [];
     for (const item of existing.items) {
       // Use baseQty if available (new transactions), fallback to quantity (old data)
-      const restoreQty = item.baseQty || item.quantity;
+      const itemBaseQty = item.baseQty || item.quantity;
+      const restoreQty = itemBaseQty - (returnedBaseMap[item.id] || 0);
+      if (restoreQty > 0) restores.push({ productId: item.productId, quantity: restoreQty });
+    }
 
-      const product = await tx.product.findUnique({ where: { id: item.productId } });
+    // Lock product rows to prevent lost updates with concurrent stock writes
+    const productIds = [...new Set(restores.map((r) => r.productId))];
+    if (productIds.length > 0) {
+      await tx.$queryRaw`SELECT id FROM "products" WHERE id IN (${Prisma.join(productIds)}) FOR UPDATE`;
+    }
+
+    for (const { productId, quantity } of restores) {
+      const product = await tx.product.findUnique({ where: { id: productId } });
       if (!product) continue;
 
-      const newStock = product.stock + restoreQty;
+      const newStock = product.stock + quantity;
 
       await tx.stockMovement.create({
         data: {
-          productId: item.productId,
+          productId,
           type: 'IN',
-          quantity: restoreQty,
+          quantity,
           previousStock: product.stock,
           newStock,
           referenceType: 'TRANSACTION',
@@ -459,17 +498,20 @@ const cancel = async (id, userId) => {
       });
 
       await tx.product.update({
-        where: { id: item.productId },
+        where: { id: productId },
         data: { stock: newStock },
       });
     }
 
-    // Revert project spent if linked
+    // Revert project spent if linked (refunds were already decremented by returns)
     if (existing.projectId) {
-      await tx.project.update({
-        where: { id: existing.projectId },
-        data: { spent: { decrement: existing.total } },
-      });
+      const revertAmount = Math.round((Number(existing.total) - totalRefunded) * 100) / 100;
+      if (revertAmount > 0) {
+        await tx.project.update({
+          where: { id: existing.projectId },
+          data: { spent: { decrement: revertAmount } },
+        });
+      }
     }
 
     return tx.transaction.update({
@@ -484,7 +526,7 @@ const cancel = async (id, userId) => {
     action: ACTION_TYPES.UPDATE,
     tableName: 'transactions',
     recordId: id,
-    oldData: { status: existing.status },
+    oldData: { status: previousStatus },
     newData: { status: 'CANCELLED' },
   });
 
