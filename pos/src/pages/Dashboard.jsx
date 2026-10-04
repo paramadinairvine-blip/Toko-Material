@@ -44,11 +44,23 @@ export default function Dashboard() {
 
   const { data: filteredTx, isLoading: txLoading, refetch: refetchTx } = useQuery({
     queryKey: ['dashboard-transactions', appliedStart, appliedEnd],
-    queryFn: () => transactionAPI.getAll({ startDate: startISO, endDate: endISO, limit: 500 }),
-    select: (res) => {
-      const list = res.data.data || [];
-      const count = list.length;
-      const total = list.reduce((sum, trx) => sum + (parseFloat(trx.total) || 0), 0);
+    // Only COMPLETED transactions (exclude cancelled), summed across all pages
+    queryFn: async () => {
+      const limit = 500;
+      let page = 1;
+      let total = 0;
+      let count = 0;
+      for (;;) {
+        const res = await transactionAPI.getAll({
+          startDate: startISO, endDate: endISO, status: 'COMPLETED', page, limit,
+        });
+        const list = res.data.data || [];
+        total += list.reduce((sum, trx) => sum + (parseFloat(trx.total) || 0), 0);
+        const pagination = res.data.pagination;
+        count = pagination?.total ?? count + list.length;
+        if (!pagination?.hasNextPage || list.length === 0) break;
+        page += 1;
+      }
       return { count, total };
     },
     refetchInterval: 30000,
