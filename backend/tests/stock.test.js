@@ -66,6 +66,12 @@ describe('GET /api/stock', () => {
       .set('Authorization', `Bearer ${adminToken}`);
 
     expect(res.status).toBe(200);
+    const { where } = mockPrisma.product.findMany.mock.calls[0][0];
+    // Day boundaries must be in WIB (+07:00), independent of server timezone
+    expect(where.stockMovements.some.createdAt).toEqual({
+      gte: new Date('2026-03-01T00:00:00+07:00'),
+      lte: new Date('2026-03-22T23:59:59.999+07:00'),
+    });
   });
 
   test('should support category filter', async () => {

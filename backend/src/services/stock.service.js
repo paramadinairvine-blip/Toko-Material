@@ -76,12 +76,8 @@ const getAllStock = async ({ page = 1, limit = DEFAULT_PAGE_SIZE, categoryId, se
 
   if (dateFrom || dateTo) {
     const movementWhere = {};
-    if (dateFrom) movementWhere.gte = new Date(dateFrom);
-    if (dateTo) {
-      const end = new Date(dateTo);
-      end.setHours(23, 59, 59, 999);
-      movementWhere.lte = end;
-    }
+    if (dateFrom) movementWhere.gte = wibDayStart(dateFrom);
+    if (dateTo) movementWhere.lte = wibDayEnd(dateTo);
     where.stockMovements = {
       some: { createdAt: movementWhere },
     };
