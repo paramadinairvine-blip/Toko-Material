@@ -110,6 +110,55 @@ describe('POST /api/purchase-orders', () => {
   });
 });
 
+describe('PUT /api/purchase-orders/:id (validasi)', () => {
+  const draftPO = { id: 'po-1', status: 'DRAFT', items: [] };
+
+  const put = (body) => request(app)
+    .put('/api/purchase-orders/po-1')
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send(body);
+
+  test('menolak items kosong', async () => {
+    mockPrisma.purchaseOrder.findUnique.mockResolvedValue(draftPO);
+    const res = await put({ items: [] });
+    expect(res.status).toBe(422);
+    expect(mockPrisma.purchaseOrderItem.deleteMany).not.toHaveBeenCalled();
+  });
+
+  test('menolak quantity bukan bilangan bulat >= 1', async () => {
+    mockPrisma.purchaseOrder.findUnique.mockResolvedValue(draftPO);
+    const res = await put({ items: [{ productId: 'p-1', quantity: 0, price: 1000 }] });
+    expect(res.status).toBe(422);
+    const res2 = await put({ items: [{ productId: 'p-1', quantity: 1.5, price: 1000 }] });
+    expect(res2.status).toBe(422);
+  });
+
+  test('menolak harga negatif dan productId kosong/bukan string', async () => {
+    mockPrisma.purchaseOrder.findUnique.mockResolvedValue(draftPO);
+    const res = await put({ items: [{ productId: 'p-1', quantity: 1, price: -5 }] });
+    expect(res.status).toBe(422);
+    const res2 = await put({ items: [{ productId: '', quantity: 1, price: 5 }] });
+    expect(res2.status).toBe(422);
+    const res3 = await put({ items: [{ productId: { id: 'x' }, quantity: 1, price: 5 }] });
+    expect(res3.status).toBe(422);
+  });
+
+  test('memetakan unitPrice → price lalu menyimpan item', async () => {
+    mockPrisma.purchaseOrder.findUnique.mockResolvedValue(draftPO);
+    mockPrisma.purchaseOrderItem.deleteMany.mockResolvedValue({});
+    mockPrisma.purchaseOrderItem.create.mockResolvedValue({});
+    mockPrisma.purchaseOrder.update.mockResolvedValue({});
+    mockPrisma.auditLog.create.mockResolvedValue({});
+
+    const res = await put({ items: [{ productId: 'p-1', quantity: 2, unitPrice: 1500 }] });
+
+    expect(res.status).toBe(200);
+    expect(mockPrisma.purchaseOrderItem.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ productId: 'p-1', quantity: 2, price: 1500, subtotal: 3000 }),
+    }));
+  });
+});
+
 describe('PUT /api/purchase-orders/:id/cancel', () => {
   test('should reject non-ADMIN', async () => {
     const res = await request(app)

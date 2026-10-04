@@ -23,6 +23,20 @@ const projectIncludes = {
   },
 };
 
+// ─── status guards ──────────────────────────────────────────────────
+
+/**
+ * Tolak perubahan material pada proyek yang sudah selesai / dibatalkan.
+ */
+const assertProjectEditable = (project) => {
+  if (project.status === 'CANCELLED') {
+    throw new AppError('Proyek yang dibatalkan tidak dapat diubah', 400);
+  }
+  if (project.status === 'COMPLETED') {
+    throw new AppError('Proyek yang sudah selesai tidak dapat diubah. Buka kembali proyek (status Sedang Berjalan) terlebih dahulu', 400);
+  }
+};
+
 // ─── public API ─────────────────────────────────────────────────────
 
 /**
@@ -200,6 +214,54 @@ const update = async (id, data, userId) => {
 
   const { materials, ...header } = data;
 
+  if (existing.status === 'CANCELLED') {
+    throw new AppError('Proyek yang dibatalkan tidak dapat diubah', 400);
+  }
+
+  // Proyek selesai hanya boleh dibuka kembali (COMPLETED → IN_PROGRESS);
+  // field lain & material diabaikan, edit dilakukan setelah dibuka kembali.
+  if (existing.status === 'COMPLETED') {
+    if (header.status !== 'IN_PROGRESS') {
+      throw new AppError('Proyek yang sudah selesai hanya dapat dibuka kembali ke status Sedang Berjalan', 400);
+    }
+
+    const reopened = await prisma.project.update({
+      where: { id },
+      data: { status: 'IN_PROGRESS', updatedBy: userId },
+      include: projectIncludes,
+    });
+
+    await createLog({
+      userId,
+      action: ACTION_TYPES.UPDATE,
+      tableName: 'projects',
+      recordId: id,
+      oldData: { status: existing.status },
+      newData: { status: 'IN_PROGRESS' },
+    });
+
+    return reopened;
+  }
+
+  // Validasi sinkronisasi material sebelum menulis apa pun
+  if (materials && Array.isArray(materials)) {
+    const existingById = new Map(existing.materials.map((m) => [m.id, m]));
+    const incomingIds = new Set(materials.filter((m) => m.id).map((m) => m.id));
+
+    for (const m of existing.materials) {
+      if (!incomingIds.has(m.id) && m.usedQty > 0) {
+        throw new AppError('Material yang sudah terpakai tidak dapat dihapus dari proyek', 400);
+      }
+    }
+
+    for (const m of materials) {
+      const current = m.id ? existingById.get(m.id) : null;
+      if (current && m.usedQty !== undefined && m.usedQty !== null && Number(m.usedQty) < current.usedQty) {
+        throw new AppError(`Penggunaan material tidak boleh dikurangi (minimal ${current.usedQty})`, 400);
+      }
+    }
+  }
+
   const project = await prisma.$transaction(async (tx) => {
     // Update project header
     await tx.project.update({
@@ -318,6 +380,7 @@ const remove = async (id, userId) => {
 const addMaterial = async (projectId, materialData, userId) => {
   const project = await prisma.project.findUnique({ where: { id: projectId } });
   if (!project) throw new AppError('Proyek tidak ditemukan', 404);
+  assertProjectEditable(project);
 
   let unitPrice = materialData.unitPrice;
   if (unitPrice === undefined || unitPrice === null) {
@@ -360,6 +423,13 @@ const updateMaterialUsage = async (projectId, materialId, usedQty, userId) => {
   if (!material || material.projectId !== projectId) {
     throw new AppError('Material proyek tidak ditemukan', 404);
   }
+
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    select: { id: true, status: true },
+  });
+  if (!project) throw new AppError('Proyek tidak ditemukan', 404);
+  assertProjectEditable(project);
 
   const oldUsedQty = material.usedQty;
 

@@ -66,6 +66,10 @@ const validateUserUpdate = [
   body('role')
     .optional()
     .isIn(Object.values(ROLES)).withMessage(`Role harus salah satu dari: ${Object.values(ROLES).join(', ')}`),
+  body('isActive')
+    .optional()
+    .isBoolean().withMessage('Status aktif harus berupa boolean')
+    .toBoolean(),
   handleValidationErrors,
 ];
 
@@ -168,6 +172,71 @@ const validateTransaction = [
 
 // ==================== Purchase Order ====================
 
+// Accept both 'price' and 'unitPrice' from frontend
+const remapPOItemPrice = (req, _res, next) => {
+  if (Array.isArray(req.body?.items)) {
+    req.body.items = req.body.items.map((item) => {
+      if (item && item.unitPrice !== undefined && item.price === undefined) {
+        item.price = item.unitPrice;
+        delete item.unitPrice;
+      }
+      return item;
+    });
+  }
+  next();
+};
+
+const poItemRules = [
+  body('items.*.productId')
+    .isString().withMessage('Product ID tidak valid')
+    .bail()
+    .trim()
+    .notEmpty().withMessage('Product ID wajib diisi pada setiap item'),
+  body('items.*.unitId')
+    .optional({ values: 'falsy' })
+    .isString().withMessage('Unit ID tidak valid'),
+  body('items.*.quantity')
+    .custom((value) => {
+      if (value === undefined || value === null || value === '') {
+        throw new Error('Jumlah wajib diisi pada setiap item');
+      }
+      const num = Number(value);
+      if (isNaN(num) || num < 1 || !Number.isInteger(num)) {
+        throw new Error('Jumlah harus bilangan bulat minimal 1');
+      }
+      return true;
+    }),
+  remapPOItemPrice,
+  body('items.*.price')
+    .custom((value) => {
+      if (value === undefined || value === null || value === '') {
+        throw new Error('Harga wajib diisi pada setiap item');
+      }
+      const num = Number(value);
+      if (isNaN(num) || num < 0) {
+        throw new Error('Harga harus berupa angka positif');
+      }
+      return true;
+    }),
+];
+
+const validatePurchaseOrderUpdate = [
+  body('supplierId')
+    .optional()
+    .isString().withMessage('Supplier tidak valid')
+    .bail()
+    .trim()
+    .notEmpty().withMessage('Supplier tidak boleh kosong'),
+  body('orderDate')
+    .optional({ values: 'falsy' })
+    .isISO8601().withMessage('Tanggal order tidak valid'),
+  body('items')
+    .optional()
+    .isArray({ min: 1 }).withMessage('Item purchase order harus berupa array minimal 1 item'),
+  ...poItemRules,
+  handleValidationErrors,
+];
+
 const validatePurchaseOrder = [
   body('supplierId')
     .notEmpty().withMessage('Supplier wajib diisi'),
@@ -186,19 +255,7 @@ const validatePurchaseOrder = [
       }
       return true;
     }),
-  // Accept both 'price' and 'unitPrice' from frontend
-  (req, _res, next) => {
-    if (Array.isArray(req.body?.items)) {
-      req.body.items = req.body.items.map((item) => {
-        if (item.unitPrice !== undefined && item.price === undefined) {
-          item.price = item.unitPrice;
-          delete item.unitPrice;
-        }
-        return item;
-      });
-    }
-    next();
-  },
+  remapPOItemPrice,
   body('items.*.price')
     .custom((value) => {
       if (value === undefined || value === null || value === '') {
@@ -235,6 +292,52 @@ const validateProject = [
   body('budget')
     .optional()
     .isFloat({ min: 0 }).withMessage('Anggaran harus berupa angka positif'),
+  handleValidationErrors,
+];
+
+const validateProjectUpdate = [
+  body('name')
+    .optional()
+    .isString().withMessage('Nama proyek tidak valid')
+    .bail()
+    .trim()
+    .notEmpty().withMessage('Nama proyek tidak boleh kosong'),
+  body('status')
+    .optional()
+    .isIn(Object.values(PROJECT_STATUS))
+    .withMessage(`Status proyek harus salah satu dari: ${Object.values(PROJECT_STATUS).join(', ')}`),
+  body('budget')
+    .optional()
+    .isFloat({ min: 0 }).withMessage('Anggaran harus berupa angka positif'),
+  body('startDate')
+    .optional({ values: 'falsy' })
+    .isISO8601().withMessage('Tanggal mulai tidak valid'),
+  body('endDate')
+    .optional({ values: 'falsy' })
+    .isISO8601().withMessage('Tanggal selesai tidak valid')
+    .bail()
+    .custom((value, { req }) => {
+      if (req.body.startDate && new Date(value) < new Date(req.body.startDate)) {
+        throw new Error('Tanggal selesai tidak boleh sebelum tanggal mulai');
+      }
+      return true;
+    }),
+  body('materials')
+    .optional()
+    .isArray().withMessage('Material harus berupa array'),
+  body('materials.*.productId')
+    .isString().withMessage('Product ID tidak valid')
+    .bail()
+    .notEmpty().withMessage('Product ID wajib diisi pada setiap material'),
+  body('materials.*.estimatedQty')
+    .optional({ values: 'null' })
+    .isInt({ min: 0 }).withMessage('Estimasi jumlah harus bilangan bulat ≥ 0'),
+  body('materials.*.usedQty')
+    .optional({ values: 'null' })
+    .isInt({ min: 0 }).withMessage('Jumlah terpakai harus bilangan bulat ≥ 0'),
+  body('materials.*.unitPrice')
+    .optional({ values: 'null' })
+    .isFloat({ min: 0 }).withMessage('Harga satuan harus berupa angka positif'),
   handleValidationErrors,
 ];
 
@@ -278,8 +381,10 @@ module.exports = {
   validateProduct,
   validateTransaction,
   validatePurchaseOrder,
+  validatePurchaseOrderUpdate,
   validateSupplier,
   validateProject,
+  validateProjectUpdate,
   validateStockOpname,
   validateReturn,
 };

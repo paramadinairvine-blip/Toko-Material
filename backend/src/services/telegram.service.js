@@ -8,6 +8,14 @@ const TELEGRAM_ENABLED = process.env.TELEGRAM_ENABLED === 'true';
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}`;
 
 /**
+ * Escape karakter khusus HTML (parse_mode HTML) untuk data dari pengguna.
+ */
+const escapeHtml = (value) => String(value ?? '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;');
+
+/**
  * Send a message to Telegram using the Bot API.
  */
 const sendMessage = async (text) => {
@@ -58,8 +66,8 @@ const sendTransactionNotification = async (transaction) => {
 
   // Build item list
   const itemLines = (transaction.items || []).map((item, i) => {
-    const name = item.product?.name || 'Produk';
-    const unitName = item.unit?.abbreviation || item.product?.unitOfMeasure?.abbreviation || 'pcs';
+    const name = escapeHtml(item.product?.name || 'Produk');
+    const unitName = escapeHtml(item.unit?.abbreviation || item.product?.unitOfMeasure?.abbreviation || 'pcs');
     const qty = item.quantity;
     const price = formatCurrency(item.price);
     const subtotal = formatCurrency(item.subtotal);
@@ -68,21 +76,21 @@ const sendTransactionNotification = async (transaction) => {
 
   let text = `🧾 <b>TRANSAKSI BARU</b>\n`;
   text += `━━━━━━━━━━━━━━━━━━\n`;
-  text += `📋 No: <b>${transaction.transactionNumber}</b>\n`;
+  text += `📋 No: <b>${escapeHtml(transaction.transactionNumber)}</b>\n`;
   text += `📅 ${date}\n`;
   text += `💳 Tipe: ${typeLabel}\n`;
-  text += `👤 Kasir: ${transaction.creator?.fullName || '-'}\n`;
+  text += `👤 Kasir: ${escapeHtml(transaction.creator?.fullName || '-')}\n`;
 
   if (transaction.customerName) {
-    text += `🧑 Pelanggan: ${transaction.customerName}\n`;
+    text += `🧑 Pelanggan: ${escapeHtml(transaction.customerName)}\n`;
   }
 
   if (transaction.unitLembaga) {
-    text += `🏢 Unit: ${transaction.unitLembaga.name}\n`;
+    text += `🏢 Unit: ${escapeHtml(transaction.unitLembaga.name)}\n`;
   }
 
   if (transaction.project) {
-    text += `📁 Proyek: ${transaction.project.name}\n`;
+    text += `📁 Proyek: ${escapeHtml(transaction.project.name)}\n`;
   }
 
   text += `\n📦 <b>ITEM:</b>\n${itemLines}\n`;
@@ -142,10 +150,11 @@ const sendDailyReport = async () => {
       },
     });
 
-    // Fetch today's returns
+    // Fetch today's returns (abaikan retur dari transaksi yang dibatalkan)
     const returns = await prisma.transactionReturn.findMany({
       where: {
         createdAt: { gte: startOfDay, lte: endOfDay },
+        transaction: { status: { not: 'CANCELLED' } },
       },
     });
 
@@ -207,7 +216,7 @@ const sendDailyReport = async () => {
         text += `\n👥 <b>PER KASIR:</b>\n`;
         for (const name of kasirNames) {
           const k = kasirMap[name];
-          text += `   • ${name}: ${k.count} trx — ${formatCurrency(k.total)}\n`;
+          text += `   • ${escapeHtml(name)}: ${k.count} trx — ${formatCurrency(k.total)}\n`;
         }
       }
     }
@@ -226,4 +235,5 @@ module.exports = {
   sendMessage,
   sendTransactionNotification,
   sendDailyReport,
+  escapeHtml,
 };
