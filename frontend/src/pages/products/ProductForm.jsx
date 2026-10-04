@@ -122,6 +122,10 @@ export default function ProductForm() {
     setSellUnits((prev) => prev.map((u, i) => {
       if (i !== idx) return field === 'isDefault' && value ? { ...u, isDefault: false } : u;
       if (field === 'unitId') {
+        // Common units not yet in master data are sent by name (backend creates them)
+        if (value.startsWith('name:')) {
+          return { ...u, unitId: '', unitName: value.slice(5) };
+        }
         const selected = unitMeasures?.find((m) => m.id === value);
         return { ...u, unitId: value, unitName: selected?.name || '' };
       }
@@ -243,17 +247,23 @@ export default function ProductForm() {
       unit: form.unit,
       buyPrice: parseFloat(form.buyPrice) || 0,
       sellPrice: parseFloat(form.sellPrice) || 0,
-      stock: parseInt(form.stock) || 0,
       minStock: parseInt(form.minStock) || 0,
       maxStock: form.maxStock ? parseInt(form.maxStock) : undefined,
       image: form.image || undefined,
     };
 
+    // Stock is only set on create; on edit it is changed via stock movements/opname,
+    // so sending the (possibly stale) form value would overwrite live stock.
+    if (!isEdit) {
+      payload.stock = parseInt(form.stock) || 0;
+    }
+
     if (barcodeMode === 'manual' && form.barcode.trim()) {
       payload.barcode = form.barcode.trim();
     }
 
-    if (sellUnits.length > 0) {
+    // On edit always send units (even []) so removing all extra units is saved
+    if (isEdit || sellUnits.length > 0) {
       payload.units = sellUnits
         .filter((u) => u.unitId || u.unitName)
         .map((u) => ({
@@ -442,10 +452,10 @@ export default function ProductForm() {
                         <tr key={idx} className="border-b border-gray-100">
                           <td className="px-2 py-2 text-center"><span className="text-gray-400 text-xs">{idx + 2}</span></td>
                           <td className="px-3 py-2">
-                            <select value={su.unitId || ''} onChange={(e) => updateSellUnit(idx, 'unitId', e.target.value)} className="w-full rounded border-gray-300 text-sm py-1.5 px-2 focus:border-blue-500 focus:ring-blue-500">
+                            <select value={su.unitId || (su.unitName ? `name:${su.unitName}` : '')} onChange={(e) => updateSellUnit(idx, 'unitId', e.target.value)} className="w-full rounded border-gray-300 text-sm py-1.5 px-2 focus:border-blue-500 focus:ring-blue-500">
                               <option value="">Pilih...</option>
                               {unitMeasures?.map((u) => (<option key={u.id} value={u.id}>{u.name}</option>))}
-                              {commonUnits.filter(cu => !unitMeasures?.some(m => m.name.toLowerCase() === cu)).map((u) => (<option key={u} value={u}>{u.charAt(0).toUpperCase() + u.slice(1)}</option>))}
+                              {commonUnits.filter(cu => !unitMeasures?.some(m => m.name.toLowerCase() === cu)).map((u) => (<option key={u} value={`name:${u}`}>{u.charAt(0).toUpperCase() + u.slice(1)}</option>))}
                             </select>
                           </td>
                           <td className="px-3 py-2"><div className="flex items-center gap-1"><input type="number" value={su.qty} onChange={(e) => updateSellUnit(idx, 'qty', e.target.value)} placeholder="1" min="1" className="w-16 rounded border-gray-300 text-sm py-1.5 px-2 focus:border-blue-500 focus:ring-blue-500" /><span className="text-gray-500 text-xs capitalize">{form.unit}</span></div></td>

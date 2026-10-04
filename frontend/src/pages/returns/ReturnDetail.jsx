@@ -5,6 +5,7 @@ import { useReactToPrint } from 'react-to-print';
 import { HiArrowLeft, HiPrinter, HiDocumentDownload } from 'react-icons/hi';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { addPageNumbers } from '../../utils/exportPDF';
 import { returnAPI } from '../../api/endpoints';
 import { Card, Button, Loading, Table } from '../../components/common';
 import { formatRupiah, formatNumber } from '../../utils/formatCurrency';
@@ -106,12 +107,6 @@ export default function ReturnDetail() {
       },
       styles: { cellPadding: 2, overflow: 'linebreak' },
       margin: { left: 14, right: 14 },
-      didDrawPage: (data) => {
-        const pageCount = doc.internal.getNumberOfPages();
-        doc.setFontSize(8);
-        doc.setFont(undefined, 'normal');
-        doc.text(`Halaman ${data.pageNumber} dari ${pageCount}`, pw / 2, doc.internal.pageSize.getHeight() - 10, { align: 'center' });
-      },
     });
 
     // Total Refund
@@ -133,6 +128,7 @@ export default function ReturnDetail() {
       pw - 14, printY, { align: 'right' }
     );
 
+    addPageNumbers(doc);
     doc.save(`retur-${ret.returnNumber}.pdf`);
   };
 

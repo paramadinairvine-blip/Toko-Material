@@ -161,7 +161,9 @@ export default function ProjectList() {
   const projects = data?.data || [];
 
   // ─── Export helpers ─────────────────────────────────
-  const getExportData = () => {
+  // forExcel: keep numbers as numbers so Excel can sum them
+  const getExportData = (forExcel = false) => {
+    const num = (v) => (forExcel ? Number(v) || 0 : formatNumber(v));
     const headers = ['Nama Proyek', 'Status', 'Tanggal Mulai', 'Budget (Rp)', 'Terpakai (Rp)', 'Sisa (Rp)', 'Progress'];
     const rows = projects.map((p) => {
       const actualSpent = (p.materials || []).reduce((sum, m) => sum + (parseFloat(m.usedQty) || 0) * (parseFloat(m.unitPrice) || 0), 0);
@@ -169,9 +171,9 @@ export default function ProjectList() {
         p.name,
         PROJECT_STATUS_LABELS[p.status] || p.status,
         formatTanggal(p.startDate),
-        formatNumber(p.budget),
-        formatNumber(actualSpent),
-        formatNumber(Number(p.budget) - actualSpent),
+        num(p.budget),
+        num(actualSpent),
+        num(Number(p.budget) - actualSpent),
         `${p.progressPercent || 0}%`,
       ];
     });
@@ -188,7 +190,7 @@ export default function ProjectList() {
   };
 
   const handleExportExcel = () => {
-    const { headers, rows } = getExportData();
+    const { headers, rows } = getExportData(true);
     exportToExcel('Daftar Proyek', headers, rows, 'daftar-proyek.xlsx');
   };
 

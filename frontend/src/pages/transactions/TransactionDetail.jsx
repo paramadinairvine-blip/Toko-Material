@@ -22,7 +22,9 @@ export default function TransactionDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { isAdmin } = useAuth();
+  const { isAdmin, isKasir } = useAuth();
+  // Backend POST /returns is limited to ADMIN and KASIR
+  const canReturn = isAdmin || isKasir;
 
   const [showCancel, setShowCancel] = useState(false);
   const [showRetur, setShowRetur] = useState(false);
@@ -121,7 +123,7 @@ export default function TransactionDetail() {
             Faktur
           </Button>
 
-          {trx.status === 'COMPLETED' && (
+          {canReturn && trx.status === 'COMPLETED' && (
             <Button variant="outline" size="sm" icon={HiRefresh} onClick={() => setShowRetur(true)} aria-label="Retur transaksi"
               className="!text-green-600 !border-green-300 hover:!bg-green-50">
               Retur

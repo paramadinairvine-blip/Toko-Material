@@ -26,6 +26,14 @@ export const formatTanggalPanjang = (date) => {
 };
 
 /**
+ * Tanggal hari ini (WIB, UTC+7) dalam format YYYY-MM-DD.
+ * toISOString() memakai UTC, sehingga antara 00:00-07:00 WIB menghasilkan tanggal kemarin.
+ */
+export const todayWIB = () => {
+  return new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 10);
+};
+
+/**
  * Konversi tanggal YYYY-MM-DD ke ISO string dengan timezone WIB (UTC+7)
  */
 export const startOfDayWIB = (dateStr) => {

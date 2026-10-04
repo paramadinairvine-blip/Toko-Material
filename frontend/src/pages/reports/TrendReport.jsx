@@ -67,7 +67,7 @@ export default function TrendReport() {
 
   const handleExportExcel = () => {
     const headers = ['No', 'Produk', 'Jumlah'];
-    const rows = allProducts.map((r, i) => [i + 1, r.product?.name || '-', r.totalQuantity || 0]);
+    const rows = allProducts.map((r, i) => [i + 1, r.product?.name || '-', Number(r.totalQuantity) || 0]);
     exportToExcel('Laporan Tren', headers, rows, 'laporan-tren.xlsx');
   };
 
