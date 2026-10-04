@@ -3,7 +3,7 @@ const router = express.Router();
 const projectController = require('../controllers/project.controller');
 const { authenticate } = require('../middlewares/auth');
 const { authorize } = require('../middlewares/roleGuard');
-const { validateProject } = require('../middlewares/validator');
+const { validateProject, validateProjectUpdate } = require('../middlewares/validator');
 const { ROLES } = require('../utils/constants');
 
 // All routes require authentication
@@ -16,7 +16,7 @@ router.get('/:id/report', projectController.getMaterialReport);
 
 // ADMIN & KASIR can create/update/manage materials
 router.post('/', authorize(ROLES.ADMIN, ROLES.KASIR), validateProject, projectController.create);
-router.put('/:id', authorize(ROLES.ADMIN, ROLES.KASIR), projectController.update);
+router.put('/:id', authorize(ROLES.ADMIN, ROLES.KASIR), validateProjectUpdate, projectController.update);
 router.post('/:id/materials', authorize(ROLES.ADMIN, ROLES.KASIR), projectController.addMaterial);
 router.put('/:id/materials/:materialId', authorize(ROLES.ADMIN, ROLES.KASIR), projectController.updateMaterial);
 

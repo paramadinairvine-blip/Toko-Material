@@ -256,6 +256,52 @@ const validateProject = [
   handleValidationErrors,
 ];
 
+const validateProjectUpdate = [
+  body('name')
+    .optional()
+    .isString().withMessage('Nama proyek tidak valid')
+    .bail()
+    .trim()
+    .notEmpty().withMessage('Nama proyek tidak boleh kosong'),
+  body('status')
+    .optional()
+    .isIn(Object.values(PROJECT_STATUS))
+    .withMessage(`Status proyek harus salah satu dari: ${Object.values(PROJECT_STATUS).join(', ')}`),
+  body('budget')
+    .optional()
+    .isFloat({ min: 0 }).withMessage('Anggaran harus berupa angka positif'),
+  body('startDate')
+    .optional({ values: 'falsy' })
+    .isISO8601().withMessage('Tanggal mulai tidak valid'),
+  body('endDate')
+    .optional({ values: 'falsy' })
+    .isISO8601().withMessage('Tanggal selesai tidak valid')
+    .bail()
+    .custom((value, { req }) => {
+      if (req.body.startDate && new Date(value) < new Date(req.body.startDate)) {
+        throw new Error('Tanggal selesai tidak boleh sebelum tanggal mulai');
+      }
+      return true;
+    }),
+  body('materials')
+    .optional()
+    .isArray().withMessage('Material harus berupa array'),
+  body('materials.*.productId')
+    .isString().withMessage('Product ID tidak valid')
+    .bail()
+    .notEmpty().withMessage('Product ID wajib diisi pada setiap material'),
+  body('materials.*.estimatedQty')
+    .optional({ values: 'null' })
+    .isInt({ min: 0 }).withMessage('Estimasi jumlah harus bilangan bulat ≥ 0'),
+  body('materials.*.usedQty')
+    .optional({ values: 'null' })
+    .isInt({ min: 0 }).withMessage('Jumlah terpakai harus bilangan bulat ≥ 0'),
+  body('materials.*.unitPrice')
+    .optional({ values: 'null' })
+    .isFloat({ min: 0 }).withMessage('Harga satuan harus berupa angka positif'),
+  handleValidationErrors,
+];
+
 // ==================== Stock Opname ====================
 
 const validateStockOpname = [
@@ -299,6 +345,7 @@ module.exports = {
   validatePurchaseOrderUpdate,
   validateSupplier,
   validateProject,
+  validateProjectUpdate,
   validateStockOpname,
   validateReturn,
 };
