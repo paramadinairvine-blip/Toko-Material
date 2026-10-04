@@ -6,6 +6,7 @@ const Input = forwardRef(function Input(
     error,
     helperText,
     type = 'text',
+    textarea = false,
     icon: Icon,
     iconRight: IconRight,
     disabled = false,
@@ -16,7 +17,8 @@ const Input = forwardRef(function Input(
   ref
 ) {
   const inputId = id || props.name || label?.toLowerCase().replace(/\s/g, '-');
-  const isTextarea = type === 'textarea';
+  // Accept both <Input type="textarea" /> and <Input textarea />; `textarea` must not reach the DOM
+  const isTextarea = textarea || type === 'textarea';
 
   const baseClasses =
     'w-full rounded-lg border text-sm transition-colors outline-none disabled:bg-gray-50 disabled:text-gray-500 disabled:cursor-not-allowed';
