@@ -19,6 +19,26 @@ const userSelect = {
   updatedAt: true,
 };
 
+/**
+ * Cabut semua refresh token aktif milik user (paksa login ulang).
+ */
+const revokeAllRefreshTokens = (userId) => prisma.refreshToken.updateMany({
+  where: { userId, revoked: false },
+  data: { revoked: true },
+});
+
+const isActiveAdmin = (user) => user.role === ROLES.ADMIN && user.isActive && !user.deletedAt;
+
+/**
+ * Apakah masih ada ADMIN aktif lain selain user ini.
+ */
+const hasOtherActiveAdmin = async (userId) => {
+  const count = await prisma.user.count({
+    where: { role: ROLES.ADMIN, isActive: true, deletedAt: null, id: { not: userId } },
+  });
+  return count > 0;
+};
+
 const getAll = async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -108,11 +128,31 @@ const update = async (req, res) => {
     if (role !== undefined) updateData.role = role;
     if (isActive !== undefined) updateData.isActive = isActive;
 
+    const deactivating = updateData.isActive === false && existing.isActive;
+    const demoting = updateData.role !== undefined && updateData.role !== existing.role && existing.role === ROLES.ADMIN;
+
+    if (existing.id === req.user.id) {
+      if (deactivating) {
+        return errorResponse(res, 'Tidak dapat menonaktifkan akun sendiri', 400);
+      }
+      if (demoting) {
+        return errorResponse(res, 'Tidak dapat mengubah role akun sendiri', 400);
+      }
+    }
+
+    if (isActiveAdmin(existing) && (deactivating || demoting) && !(await hasOtherActiveAdmin(id))) {
+      return errorResponse(res, 'Minimal harus ada satu ADMIN aktif', 400);
+    }
+
     const user = await prisma.user.update({
       where: { id },
       data: updateData,
       select: userSelect,
     });
+
+    if (deactivating) {
+      await revokeAllRefreshTokens(id);
+    }
 
     await createLog({
       userId: req.user.id,
@@ -145,11 +185,16 @@ const remove = async (req, res) => {
       return errorResponse(res, 'User sudah dihapus sebelumnya', 400);
     }
 
+    if (isActiveAdmin(existing) && !(await hasOtherActiveAdmin(id))) {
+      return errorResponse(res, 'Minimal harus ada satu ADMIN aktif', 400);
+    }
+
     // Soft delete: tandai sebagai dihapus, nonaktifkan akun
     await prisma.user.update({
       where: { id },
       data: { deletedAt: new Date(), isActive: false },
     });
+    await revokeAllRefreshTokens(id);
 
     await createLog({
       userId: req.user.id,
@@ -200,6 +245,8 @@ const changePassword = async (req, res) => {
       where: { id },
       data: { password: hashedPassword },
     });
+    // Sesi lain (refresh token) tidak berlaku lagi setelah password diganti
+    await revokeAllRefreshTokens(id);
 
     await createLog({
       userId: req.user.id,

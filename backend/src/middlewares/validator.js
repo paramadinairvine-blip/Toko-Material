@@ -66,6 +66,10 @@ const validateUserUpdate = [
   body('role')
     .optional()
     .isIn(Object.values(ROLES)).withMessage(`Role harus salah satu dari: ${Object.values(ROLES).join(', ')}`),
+  body('isActive')
+    .optional()
+    .isBoolean().withMessage('Status aktif harus berupa boolean')
+    .toBoolean(),
   handleValidationErrors,
 ];
 
