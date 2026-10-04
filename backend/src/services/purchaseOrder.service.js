@@ -1,4 +1,5 @@
 const prisma = require('../lib/prisma');
+const { Prisma } = require('@prisma/client');
 const { format } = require('date-fns');
 const { DEFAULT_PAGE_SIZE } = require('../utils/constants');
 const { createLog, ACTION_TYPES } = require('./auditLog.service');
@@ -68,6 +69,14 @@ const convertToBaseQty = async (tx, productId, unitId, quantity) => {
     'ProductUnit conversion not found, falling back to 1:1. Periksa konfigurasi satuan produk ini.'
   );
   return { baseQty: quantity, conversionFactor: 1 };
+};
+
+/**
+ * Harga per satuan PO → harga per satuan dasar (dibulatkan 2 desimal).
+ */
+const toBasePrice = (price, conversionFactor = 1) => {
+  const factor = Number(conversionFactor) || 1;
+  return Math.round((Number(price) / factor) * 100) / 100;
 };
 
 /**
@@ -247,10 +256,15 @@ const update = async (id, data, userId) => {
 
     // Replace items if provided
     if (items !== undefined) {
+      if (!Array.isArray(items) || items.length === 0) {
+        throw new AppError('Item purchase order minimal 1 item', 400);
+      }
+
       await tx.purchaseOrderItem.deleteMany({ where: { purchaseOrderId: id } });
 
       let totalAmount = 0;
-      for (const item of items) {
+      for (const rawItem of items) {
+        const item = { ...rawItem, quantity: Number(rawItem.quantity), price: Number(rawItem.price) };
         const subtotal = item.quantity * item.price;
         totalAmount += subtotal;
 
@@ -334,31 +348,6 @@ const send = async (id, userId) => {
  *   5. Create in-app notification
  */
 const receive = async (id, receivedItems, userId) => {
-  const existing = await prisma.purchaseOrder.findUnique({
-    where: { id },
-    include: {
-      items: {
-        include: {
-          product: {
-            select: { id: true, stock: true, buyPrice: true, sellPrice: true, unitId: true },
-          },
-        },
-      },
-      supplier: true,
-    },
-  });
-
-  if (!existing) throw new AppError('Purchase order tidak ditemukan', 404);
-  if (existing.status === 'RECEIVED') {
-    throw new AppError('Purchase order sudah diterima sepenuhnya', 400);
-  }
-  if (existing.status === 'CANCELLED') {
-    throw new AppError('Purchase order yang dibatalkan tidak dapat diterima', 400);
-  }
-  if (existing.status === 'DRAFT') {
-    throw new AppError('PO berstatus DRAFT belum bisa diterima, kirim dulu ke supplier', 400);
-  }
-
   // Build a map of itemId → receivedQty for this batch
   const receivedMap = new Map();
   if (receivedItems && receivedItems.length > 0) {
@@ -367,7 +356,40 @@ const receive = async (id, receivedItems, userId) => {
     }
   }
 
-  const po = await prisma.$transaction(async (tx) => {
+  const { po, previousStatus, itemCount } = await prisma.$transaction(async (tx) => {
+    // Kunci baris PO dulu agar dua penerimaan bersamaan untuk PO yang sama
+    // diproses berurutan (yang kedua membaca receivedQty & status terbaru).
+    await tx.$queryRaw`SELECT id FROM "purchase_orders" WHERE id = ${id} FOR UPDATE`;
+
+    const existing = await tx.purchaseOrder.findUnique({
+      where: { id },
+      include: { items: true },
+    });
+
+    if (!existing) throw new AppError('Purchase order tidak ditemukan', 404);
+    if (existing.status === 'RECEIVED') {
+      throw new AppError('Purchase order sudah diterima sepenuhnya', 400);
+    }
+    if (existing.status === 'CANCELLED') {
+      throw new AppError('Purchase order yang dibatalkan tidak dapat diterima', 400);
+    }
+    if (existing.status === 'DRAFT') {
+      throw new AppError('PO berstatus DRAFT belum bisa diterima, kirim dulu ke supplier', 400);
+    }
+    if (!existing.items || existing.items.length === 0) {
+      throw new AppError('Purchase order tidak memiliki item untuk diterima', 400);
+    }
+
+    // Kunci baris produk yang stoknya akan bertambah
+    const productIds = [...new Set(
+      existing.items
+        .filter((item) => (receivedMap.get(item.id) ?? 0) > 0)
+        .map((item) => item.productId)
+    )].sort();
+    if (productIds.length > 0) {
+      await tx.$queryRaw`SELECT id FROM "products" WHERE id IN (${Prisma.join(productIds)}) FOR UPDATE`;
+    }
+
     let allFullyReceived = true;
 
     for (const item of existing.items) {
@@ -393,7 +415,7 @@ const receive = async (id, receivedItems, userId) => {
       }
 
       // *** KONVERSI KE BASE UNIT ***
-      const { baseQty: addBaseQty } = await convertToBaseQty(
+      const { baseQty: addBaseQty, conversionFactor } = await convertToBaseQty(
         tx, item.productId, item.unitId, actualAddQty
       );
 
@@ -413,7 +435,7 @@ const receive = async (id, receivedItems, userId) => {
         allFullyReceived = false;
       }
 
-      // Add stock in BASE UNIT (StockMovement IN)
+      // Add stock in BASE UNIT (StockMovement IN) — baris produk sudah dikunci
       const product = await tx.product.findUnique({ where: { id: item.productId } });
       if (!product) {
         throw new AppError(`Produk ${item.productId} tidak ditemukan`, 400);
@@ -435,37 +457,35 @@ const receive = async (id, receivedItems, userId) => {
         },
       });
 
-      await tx.product.update({
-        where: { id: item.productId },
-        data: { stock: newStock },
-      });
-
-      // Check if buy price changed → record PriceHistory
-      const poBuyPrice = Number(item.price);
+      // Harga PO adalah harga per satuan PO (mis. per dus), sedangkan buyPrice
+      // produk disimpan per satuan dasar → bagi dengan conversion factor.
+      const poBuyPrice = toBasePrice(item.price, conversionFactor);
       const currentBuyPrice = Number(product.buyPrice);
+      const productUpdate = { stock: { increment: addBaseQty } };
 
       if (poBuyPrice !== currentBuyPrice) {
         await tx.priceHistory.create({
           data: {
             productId: item.productId,
             oldBuy: product.buyPrice,
-            newBuy: item.price,
+            newBuy: poBuyPrice,
             oldSell: product.sellPrice,
             newSell: product.sellPrice, // sell price unchanged
             changedBy: userId,
           },
         });
-
-        await tx.product.update({
-          where: { id: item.productId },
-          data: { buyPrice: item.price },
-        });
+        productUpdate.buyPrice = poBuyPrice;
       }
+
+      await tx.product.update({
+        where: { id: item.productId },
+        data: productUpdate,
+      });
     }
 
     const newStatus = allFullyReceived ? 'RECEIVED' : 'PARTIALLY_RECEIVED';
 
-    return tx.purchaseOrder.update({
+    const updated = await tx.purchaseOrder.update({
       where: { id },
       data: {
         status: newStatus,
@@ -474,6 +494,8 @@ const receive = async (id, receivedItems, userId) => {
       },
       include: poIncludes,
     });
+
+    return { po: updated, previousStatus: existing.status, itemCount: existing.items.length };
   }, { timeout: 30000 });
 
   await createLog({
@@ -481,8 +503,8 @@ const receive = async (id, receivedItems, userId) => {
     action: ACTION_TYPES.UPDATE,
     tableName: 'purchase_orders',
     recordId: id,
-    oldData: { status: existing.status },
-    newData: { status: po.status, receivedItemCount: existing.items.length },
+    oldData: { status: previousStatus },
+    newData: { status: po.status, receivedItemCount: itemCount },
   });
 
   // In-app notification for admins (fire-and-forget)

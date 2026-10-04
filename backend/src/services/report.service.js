@@ -1,10 +1,81 @@
 const prisma = require('../lib/prisma');
-const { format, subMonths, startOfMonth, endOfMonth } = require('date-fns');
+const { format, subMonths } = require('date-fns');
 
-// Format tanggal dalam WIB (+07:00) untuk grouping
+const WIB_OFFSET_MS = 7 * 60 * 60 * 1000;
+
+// Format tanggal dalam WIB (+07:00) untuk grouping — tidak bergantung zona waktu server
 const formatWIB = (date, fmt) => {
-  const wib = new Date(date.getTime() + 7 * 60 * 60 * 1000);
-  return format(wib, fmt);
+  const w = new Date(date.getTime() + WIB_OFFSET_MS);
+  const local = new Date(
+    w.getUTCFullYear(), w.getUTCMonth(), w.getUTCDate(),
+    w.getUTCHours(), w.getUTCMinutes(), w.getUTCSeconds(), w.getUTCMilliseconds()
+  );
+  return format(local, fmt);
+};
+
+/**
+ * Batas awal & akhir bulan kalender WIB yang memuat `date`,
+ * digeser `monthOffset` bulan (negatif = bulan sebelumnya).
+ */
+const wibMonthRange = (date, monthOffset = 0) => {
+  const w = new Date(date.getTime() + WIB_OFFSET_MS);
+  const y = w.getUTCFullYear();
+  const m = w.getUTCMonth() + monthOffset;
+  return {
+    start: new Date(Date.UTC(y, m, 1) - WIB_OFFSET_MS),
+    end: new Date(Date.UTC(y, m + 1, 1) - WIB_OFFSET_MS - 1),
+  };
+};
+
+// Refund dari transaksi yang dibatalkan tidak boleh mengurangi pendapatan
+const NOT_CANCELLED_TX = { transaction: { status: { not: 'CANCELLED' } } };
+
+/**
+ * Total pembelian berdasarkan barang yang BENAR-BENAR diterima dalam periode.
+ *
+ * Setiap penerimaan PO dicatat sebagai StockMovement type IN, referenceType PO,
+ * referenceId = id PO, quantity = qty satuan dasar, createdAt = waktu terima.
+ * Nilainya = qty dasar diterima × harga per satuan dasar item PO
+ * (subtotal / baseQty item PO untuk produk tsb).
+ */
+const getReceivedPurchaseTotal = async (dateFilter) => {
+  const where = { type: 'IN', referenceType: 'PO' };
+  if (dateFilter) where.createdAt = dateFilter;
+
+  const received = await prisma.stockMovement.groupBy({
+    by: ['referenceId', 'productId'],
+    where,
+    _sum: { quantity: true },
+  });
+  if (!received || received.length === 0) return { total: 0, poCount: 0 };
+
+  const poIds = [...new Set(received.map((r) => r.referenceId).filter(Boolean))];
+  const poItems = poIds.length > 0
+    ? await prisma.purchaseOrderItem.findMany({
+        where: { purchaseOrderId: { in: poIds } },
+        select: { purchaseOrderId: true, productId: true, quantity: true, baseQty: true, price: true, subtotal: true },
+      })
+    : [];
+
+  // Harga per satuan dasar per (PO, produk); rata-rata tertimbang bila produk muncul >1 kali
+  const priceMap = {};
+  poItems.forEach((it) => {
+    const key = `${it.purchaseOrderId}_${it.productId}`;
+    const subtotal = it.subtotal != null ? Number(it.subtotal) : Number(it.price) * it.quantity;
+    const baseQty = it.baseQty > 0 ? it.baseQty : it.quantity; // data lama tanpa baseQty → anggap satuan dasar
+    if (!priceMap[key]) priceMap[key] = { subtotal: 0, baseQty: 0 };
+    priceMap[key].subtotal += subtotal;
+    priceMap[key].baseQty += baseQty;
+  });
+
+  let total = 0;
+  received.forEach((r) => {
+    const p = priceMap[`${r.referenceId}_${r.productId}`];
+    if (!p || p.baseQty <= 0) return;
+    total += (r._sum.quantity || 0) * (p.subtotal / p.baseQty);
+  });
+
+  return { total: Math.round(total * 100) / 100, poCount: poIds.length };
 };
 
 // ─── 1. Stock Report ────────────────────────────────────────────────
@@ -84,15 +155,9 @@ const getFinancialReport = async ({ startDate, endDate, type } = {}) => {
   }
   const hasDateFilter = Object.keys(dateFilter).length > 0;
 
-  // 2a. Total purchases from received POs
-  const poWhere = { status: { in: ['RECEIVED', 'PARTIALLY_RECEIVED'] } };
-  if (hasDateFilter) poWhere.receivedAt = dateFilter;
-
-  const purchaseAgg = await prisma.purchaseOrder.aggregate({
-    where: poWhere,
-    _sum: { totalAmount: true },
-    _count: { id: true },
-  });
+  // 2a. Total pembelian = nilai barang PO yang diterima dalam periode
+  // (termasuk penerimaan parsial; bukan totalAmount PO yang receivedAt-nya di periode)
+  const purchase = await getReceivedPurchaseTotal(hasDateFilter ? dateFilter : null);
 
   // 2b. All transactions (pendapatan/revenue from POS)
   const txWhere = { status: { not: 'CANCELLED' } };
@@ -104,8 +169,8 @@ const getFinancialReport = async ({ startDate, endDate, type } = {}) => {
     select: { type: true, total: true, unitLembagaId: true },
   });
 
-  // 2b-2. Total retur dalam periode yang sama
-  const returnWhere = {};
+  // 2b-2. Total retur dalam periode yang sama (tanpa retur dari transaksi batal)
+  const returnWhere = { ...NOT_CANCELLED_TX };
   if (hasDateFilter) returnWhere.createdAt = dateFilter;
 
   const returnAgg = await prisma.transactionReturn.aggregate({
@@ -187,7 +252,7 @@ const getFinancialReport = async ({ startDate, endDate, type } = {}) => {
 
   return {
     summary: {
-      totalPurchase: Number(purchaseAgg._sum.totalAmount || 0),
+      totalPurchase: purchase.total,
       cashTotal,
       bonTotal,
       totalReturn,
@@ -219,7 +284,7 @@ const getTrendReport = async ({ startDate, endDate, groupBy = 'month' } = {}) =>
 
   // 3a-2. Retur dalam periode
   const trendReturns = await prisma.transactionReturn.findMany({
-    where: { createdAt: { gte: start, lte: end } },
+    where: { ...NOT_CANCELLED_TX, createdAt: { gte: start, lte: end } },
     select: { refundAmount: true, createdAt: true },
   });
 
@@ -315,7 +380,7 @@ const getTrendReport = async ({ startDate, endDate, groupBy = 'month' } = {}) =>
   const currentTotal = Math.round(transactions.reduce((s, t) => s + Number(t.total), 0) - currentReturnTotal);
 
   const prevReturns = await prisma.transactionReturn.aggregate({
-    where: { createdAt: { gte: prevStart, lte: prevEnd } },
+    where: { ...NOT_CANCELLED_TX, createdAt: { gte: prevStart, lte: prevEnd } },
     _sum: { refundAmount: true },
   });
   const previousTotal = Math.round(prevTransactions.reduce((s, t) => s + Number(t.total), 0) - Number(prevReturns._sum.refundAmount || 0));
@@ -368,8 +433,8 @@ const getLabaRugiReport = async ({ startDate, endDate } = {}) => {
     .filter((t) => t.type === 'BON')
     .reduce((s, t) => s + Number(t.total), 0));
 
-  // Retur
-  const returnWhere = {};
+  // Retur (tanpa retur dari transaksi batal)
+  const returnWhere = { ...NOT_CANCELLED_TX };
   if (hasDateFilter) returnWhere.createdAt = dateFilter;
 
   const returnAgg = await prisma.transactionReturn.aggregate({
@@ -384,31 +449,51 @@ const getLabaRugiReport = async ({ startDate, endDate } = {}) => {
   const txItemWhere = { transaction: { status: { not: 'CANCELLED' } } };
   if (hasDateFilter) txItemWhere.transaction.createdAt = dateFilter;
 
+  const productSelect = {
+    select: {
+      id: true,
+      name: true,
+      buyPrice: true,
+      sellPrice: true,
+      category: { select: { id: true, name: true } },
+    },
+  };
+
   const txItems = await prisma.transactionItem.findMany({
     where: txItemWhere,
     select: {
       quantity: true,
+      baseQty: true,
       subtotal: true,
-      product: {
-        select: {
-          id: true,
-          name: true,
-          buyPrice: true,
-          sellPrice: true,
-          category: { select: { id: true, name: true } },
-        },
-      },
+      product: productSelect,
     },
   });
 
-  // Hitung total HPP
+  // Barang yang diretur (retur dalam periode, transaksi tidak batal) mengurangi HPP,
+  // sejalan dengan refund yang mengurangi pendapatan.
+  const returnItemWhere = { transactionReturn: { ...NOT_CANCELLED_TX } };
+  if (hasDateFilter) returnItemWhere.transactionReturn.createdAt = dateFilter;
+
+  const returnItems = await prisma.transactionReturnItem.findMany({
+    where: returnItemWhere,
+    select: {
+      quantity: true,
+      baseQty: true,
+      subtotal: true,
+      product: productSelect,
+    },
+  });
+
+  // Hitung total HPP (qty dalam satuan dasar × buyPrice per satuan dasar)
   let totalHPP = 0;
   const categoryHPPMap = {};
   const productMarginMap = {};
 
-  txItems.forEach((item) => {
+  const accumulate = (item, sign) => {
     const buyPrice = Number(item.product.buyPrice);
-    const hpp = item.quantity * buyPrice;
+    const qty = item.baseQty > 0 ? item.baseQty : item.quantity;
+    const hpp = sign * qty * buyPrice;
+    const revenue = sign * Number(item.subtotal);
     totalHPP = Math.round(totalHPP + hpp);
 
     // HPP per kategori
@@ -418,7 +503,7 @@ const getLabaRugiReport = async ({ startDate, endDate } = {}) => {
       categoryHPPMap[catId] = { categoryName: catName, totalHPP: 0, totalRevenue: 0 };
     }
     categoryHPPMap[catId].totalHPP = Math.round(categoryHPPMap[catId].totalHPP + hpp);
-    categoryHPPMap[catId].totalRevenue = Math.round(categoryHPPMap[catId].totalRevenue + Number(item.subtotal));
+    categoryHPPMap[catId].totalRevenue = Math.round(categoryHPPMap[catId].totalRevenue + revenue);
 
     // Per-product margin aggregation
     const prodId = item.product.id;
@@ -432,10 +517,13 @@ const getLabaRugiReport = async ({ startDate, endDate } = {}) => {
         totalHPP: 0,
       };
     }
-    productMarginMap[prodId].totalQty += item.quantity;
-    productMarginMap[prodId].totalRevenue = Math.round(productMarginMap[prodId].totalRevenue + Number(item.subtotal));
+    productMarginMap[prodId].totalQty += sign * qty;
+    productMarginMap[prodId].totalRevenue = Math.round(productMarginMap[prodId].totalRevenue + revenue);
     productMarginMap[prodId].totalHPP = Math.round(productMarginMap[prodId].totalHPP + hpp);
-  });
+  };
+
+  txItems.forEach((item) => accumulate(item, 1));
+  (returnItems || []).forEach((item) => accumulate(item, -1));
 
   const grossProfit = Math.round(netRevenue - totalHPP);
   const grossMarginPercent = netRevenue > 0
@@ -490,16 +578,22 @@ const getLabaRugiReport = async ({ startDate, endDate } = {}) => {
  * Aggregated data for the main dashboard.
  */
 const getDashboardSummary = async ({ startDate, endDate } = {}) => {
-  const now = new Date();
-  const monthStart = startDate ? new Date(startDate) : startOfMonth(now);
-  // Ensure endDate covers the full day (23:59:59.999)
+  // Default: bulan berjalan menurut kalender WIB (bukan zona waktu server)
+  const currentMonth = wibMonthRange(new Date());
+  let monthStart;
+  if (startDate) {
+    monthStart = startDate.includes('T') ? new Date(startDate) : new Date(startDate + 'T00:00:00+07:00');
+  } else {
+    monthStart = currentMonth.start;
+  }
+  // Ensure endDate covers the full day (23:59:59.999 WIB)
   let monthEnd;
   if (endDate) {
-    monthEnd = new Date(endDate);
-    monthEnd.setHours(23, 59, 59, 999);
+    monthEnd = endDate.includes('T') ? new Date(endDate) : new Date(endDate + 'T23:59:59.999+07:00');
   } else {
-    monthEnd = endOfMonth(now);
+    monthEnd = currentMonth.end;
   }
+  const chartStart = wibMonthRange(monthStart, -5).start;
 
   // Run all queries in parallel
   const [
@@ -549,7 +643,7 @@ const getDashboardSummary = async ({ startDate, endDate } = {}) => {
     prisma.transaction.findMany({
       where: {
         status: { not: 'CANCELLED' },
-        createdAt: { gte: subMonths(monthStart, 5) },
+        createdAt: { gte: chartStart },
       },
       select: { total: true, createdAt: true, type: true },
     }),
@@ -566,7 +660,7 @@ const getDashboardSummary = async ({ startDate, endDate } = {}) => {
 
   // Monthly retur
   const monthlyReturnAgg = await prisma.transactionReturn.aggregate({
-    where: { createdAt: { gte: monthStart, lte: monthEnd } },
+    where: { ...NOT_CANCELLED_TX, createdAt: { gte: monthStart, lte: monthEnd } },
     _sum: { refundAmount: true },
     _count: { id: true },
   });
@@ -577,15 +671,15 @@ const getDashboardSummary = async ({ startDate, endDate } = {}) => {
 
   // 6-month chart data (with retur deduction)
   const sixMonthReturns = await prisma.transactionReturn.findMany({
-    where: { createdAt: { gte: subMonths(monthStart, 5) } },
+    where: { ...NOT_CANCELLED_TX, createdAt: { gte: chartStart } },
     select: { refundAmount: true, createdAt: true },
   });
 
   const chartMap = {};
   for (let i = 5; i >= 0; i--) {
-    const m = subMonths(monthStart, i);
-    const key = format(m, 'yyyy-MM');
-    chartMap[key] = { month: key, label: format(m, 'MMM yyyy'), total: 0, returnTotal: 0, count: 0 };
+    const m = wibMonthRange(monthStart, -i).start;
+    const key = formatWIB(m, 'yyyy-MM');
+    chartMap[key] = { month: key, label: formatWIB(m, 'MMM yyyy'), total: 0, returnTotal: 0, count: 0 };
   }
   sixMonthTransactions.forEach((t) => {
     const key = formatWIB(t.createdAt, 'yyyy-MM');

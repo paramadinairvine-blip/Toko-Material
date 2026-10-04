@@ -1,7 +1,7 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useImperativeHandle } from 'react';
 import { HiSearch } from 'react-icons/hi';
 
-export default function ProductSearch({ onSearch, autoFocus = true }) {
+export default function ProductSearch({ onSearch, autoFocus = true, ref }) {
   const [value, setValue] = useState('');
   const inputRef = useRef(null);
   const timerRef = useRef(null);
@@ -11,6 +11,18 @@ export default function ProductSearch({ onSearch, autoFocus = true }) {
       inputRef.current.focus();
     }
   }, [autoFocus]);
+
+  // Called by the cashier page after a USB barcode scan: the scanner "types" the code
+  // into this focused input, so strip it again (keeping whatever was typed before).
+  useImperativeHandle(ref, () => ({
+    removeScannedCode: (code) => {
+      const current = inputRef.current?.value ?? value;
+      const next = code && current.endsWith(code) ? current.slice(0, -code.length) : '';
+      clearTimeout(timerRef.current);
+      setValue(next);
+      onSearch(next);
+    },
+  }));
 
   const handleChange = (e) => {
     const val = e.target.value;

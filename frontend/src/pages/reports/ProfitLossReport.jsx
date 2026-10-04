@@ -8,7 +8,7 @@ import {
 import { reportAPI } from '../../api/endpoints';
 import { Card, Button, Skeleton, CalendarPicker } from '../../components/common';
 import { formatRupiah, formatNumber } from '../../utils/formatCurrency';
-import { formatTanggal, startOfDayWIB, endOfDayWIB } from '../../utils/formatDate';
+import { formatTanggal, startOfDayWIB, endOfDayWIB, todayWIB } from '../../utils/formatDate';
 import { STORE_INFO } from '../../utils/constants';
 import { exportTableToPDF } from '../../utils/exportPDF';
 import { exportToExcel } from '../../utils/exportExcel';
@@ -52,8 +52,7 @@ function PLRow({ label, value, bold, indent, negative, border }) {
 
 export default function ProfitLossReport() {
   const printRef = useRef();
-  const now = new Date();
-  const today = now.toISOString().slice(0, 10);
+  const today = todayWIB();
 
   const [selectedDate, setSelectedDate] = useState(today);
 
@@ -100,18 +99,18 @@ export default function ProfitLossReport() {
   const handleExportExcel = () => {
     const headers = ['Komponen', 'Nilai (Rp)'];
     const rows = [
-      ['Penjualan Tunai', formatNumber(summary.cashRevenue || 0)],
-      ['Penjualan Bon', formatNumber(summary.bonRevenue || 0)],
-      ['Retur Penjualan', formatNumber(-(summary.totalReturn || 0))],
-      ['Pendapatan Bersih', formatNumber(summary.netRevenue || 0)],
+      ['Penjualan Tunai', Number(summary.cashRevenue) || 0],
+      ['Penjualan Bon', Number(summary.bonRevenue) || 0],
+      ['Retur Penjualan', -(Number(summary.totalReturn) || 0)],
+      ['Pendapatan Bersih', Number(summary.netRevenue) || 0],
       [''],
-      ['Harga Pokok Penjualan (HPP)', formatNumber(-(summary.totalHPP || 0))],
+      ['Harga Pokok Penjualan (HPP)', -(Number(summary.totalHPP) || 0)],
       [''],
-      ['LABA KOTOR', formatNumber(summary.grossProfit || 0)],
+      ['LABA KOTOR', Number(summary.grossProfit) || 0],
       ['Margin Laba Kotor (%)', `${summary.grossMarginPercent || 0}%`],
       [''],
       ['--- HPP per Kategori ---'],
-      ...hppByCategory.map((c) => [c.categoryName, formatNumber(c.totalHPP)]),
+      ...hppByCategory.map((c) => [c.categoryName, Number(c.totalHPP) || 0]),
     ];
     exportToExcel('Laba Rugi', headers, rows, 'laba-rugi.xlsx');
   };

@@ -5,7 +5,8 @@ import * as XLSX from 'xlsx';
  *
  * @param {string} title - Sheet name / report title
  * @param {string[]} headers - Column headers
- * @param {Array<Array<string|number>>} data - Table rows (array of arrays)
+ * @param {Array<Array<string|number>>} data - Table rows (array of arrays).
+ *   Use plain numbers for numeric values (not formatNumber strings) so Excel can calculate them.
  * @param {string} [filename='laporan.xlsx'] - Output filename
  */
 export function exportToExcel(title, headers, data, filename = 'laporan.xlsx') {
@@ -18,6 +19,19 @@ export function exportToExcel(title, headers, data, filename = 'laporan.xlsx') {
   ];
 
   const ws = XLSX.utils.aoa_to_sheet(wsData);
+
+  // ─── Number format for numeric cells ───────────────
+  // Pass raw numbers (not formatted strings) so Excel can sum them;
+  // they are displayed with thousand separators.
+  const dataRange = XLSX.utils.decode_range(ws['!ref'] || 'A1');
+  for (let r = 3; r <= dataRange.e.r; r++) {
+    for (let c = dataRange.s.c; c <= dataRange.e.c; c++) {
+      const cell = ws[XLSX.utils.encode_cell({ r, c })];
+      if (cell && cell.t === 'n') {
+        cell.z = Number.isInteger(cell.v) ? '#,##0' : '#,##0.00';
+      }
+    }
+  }
 
   // ─── Bold header row (row index 2 = headers) ───────
   const headerRange = XLSX.utils.decode_range(ws['!ref'] || 'A1');

@@ -93,7 +93,18 @@ function JsonDiff({ oldData, newData }) {
 }
 
 // ─── Detail Modal ─────────────────────────────────────
-function DetailModal({ logId, onClose }) {
+// Tables whose changes cannot be rolled back safely (stock/money side effects).
+// Fallback only — the backend sends `canRollback` per audit log item.
+const NON_ROLLBACK_TABLES = [
+  'transactions',
+  'transaction_returns',
+  'purchase_orders',
+  'stock_movements',
+  'stock_opnames',
+  'projects',
+];
+
+function DetailModal({ logId, listCanRollback, onClose }) {
   const queryClient = useQueryClient();
   const [showRollback, setShowRollback] = useState(false);
 
@@ -118,7 +129,10 @@ function DetailModal({ logId, onClose }) {
     onError: (err) => toast.error(getErrorMessage(err, 'Gagal melakukan rollback')),
   });
 
-  const canRollback = log?.action === 'UPDATE' || log?.action === 'DELETE';
+  const serverCanRollback = typeof log?.canRollback === 'boolean' ? log.canRollback : listCanRollback;
+  const canRollback = typeof serverCanRollback === 'boolean'
+    ? serverCanRollback === true
+    : (log?.action === 'UPDATE' || log?.action === 'DELETE') && !NON_ROLLBACK_TABLES.includes(log?.tableName);
 
   return (
     <>
@@ -386,7 +400,11 @@ export default function AuditLog() {
 
       {/* Detail Modal */}
       {detailId && (
-        <DetailModal logId={detailId} onClose={() => setDetailId(null)} />
+        <DetailModal
+          logId={detailId}
+          listCanRollback={logs.find((l) => l.id === detailId)?.canRollback}
+          onClose={() => setDetailId(null)}
+        />
       )}
     </div>
   );

@@ -8,7 +8,7 @@ import {
 import { reportAPI } from '../../api/endpoints';
 import { Card, Button, Select, Loading, Table, Skeleton, CalendarPicker } from '../../components/common';
 import { formatRupiah, formatNumber } from '../../utils/formatCurrency';
-import { formatTanggal, startOfDayWIB, endOfDayWIB } from '../../utils/formatDate';
+import { formatTanggal, startOfDayWIB, endOfDayWIB, todayWIB } from '../../utils/formatDate';
 import { TRANSACTION_TYPE_LABELS, STORE_INFO } from '../../utils/constants';
 import { exportTableToPDF } from '../../utils/exportPDF';
 import { exportToExcel } from '../../utils/exportExcel';
@@ -42,8 +42,7 @@ export default function FinancialReport() {
   const printRef = useRef();
 
   // Default: today
-  const now = new Date();
-  const today = now.toISOString().slice(0, 10);
+  const today = todayWIB();
 
   const [selectedDate, setSelectedDate] = useState(today);
   const [typeFilter, setTypeFilter] = useState('');
@@ -139,7 +138,7 @@ export default function FinancialReport() {
   const handleExportExcel = () => {
     const headers = ['Kasir', 'Tanggal', 'Tunai (Rp)', 'Overbooking TU (Rp)', 'Retur (Rp)', 'Total Bersih (Rp)', 'Jml Trx'];
     const rows = perCashier.map((r) => [
-      r.cashierName, formatDate(r.date), formatNumber(r.cashTotal), formatNumber(r.bonTotal), formatNumber(r.returnTotal), formatNumber(r.netTotal), r.transactionCount,
+      r.cashierName, formatDate(r.date), Number(r.cashTotal) || 0, Number(r.bonTotal) || 0, Number(r.returnTotal) || 0, Number(r.netTotal) || 0, Number(r.transactionCount) || 0,
     ]);
     exportToExcel('Rekap Kasir', headers, rows, 'rekap-kasir.xlsx');
   };

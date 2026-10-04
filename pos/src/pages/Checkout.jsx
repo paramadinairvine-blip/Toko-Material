@@ -79,10 +79,21 @@ export default function Checkout() {
       const resData = error.response?.data;
       if (resData?.code === 'PRICE_CHANGED') {
         const changes = resData.priceChanges || [];
+        // Update cart prices to the current server prices. priceChanges has no unitId,
+        // so match by productId + the price that was sent (oldPrice).
+        const { items: cartItems, updateUnitPrice } = useCartStore.getState();
+        changes.forEach((p) => {
+          cartItems
+            .filter((i) => i.productId === p.productId && Math.abs(Number(i.unitPrice) - Number(p.oldPrice)) < 1)
+            .forEach((i) => updateUnitPrice(i.cartKey, Number(p.newPrice)));
+        });
         const detail = changes.map(
           (p) => `${p.productName}: Rp ${Number(p.oldPrice).toLocaleString('id-ID')} → Rp ${Number(p.newPrice).toLocaleString('id-ID')}`
         ).join('\n');
-        toast.error(`Harga berubah!\n${detail}\nSilakan refresh keranjang.`, { duration: 6000 });
+        toast.error(
+          `Harga berubah dan keranjang sudah diperbarui ke harga terbaru:\n${detail}\nPeriksa total & pembayaran, lalu proses ulang.`,
+          { duration: 8000 }
+        );
         queryClient.invalidateQueries({ queryKey: ['products'] });
       } else {
         toast.error(resData?.message || 'Gagal membuat transaksi');

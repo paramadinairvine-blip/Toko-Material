@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import { HiShoppingCart } from 'react-icons/hi';
@@ -14,6 +14,7 @@ export default function Cashier() {
   const [searchQuery, setSearchQuery] = useState('');
   const [showMobileCart, setShowMobileCart] = useState(false);
   const [unitPickerProduct, setUnitPickerProduct] = useState(null);
+  const searchRef = useRef(null);
   const addItem = useCartStore((s) => s.addItem);
   const items = useCartStore((s) => s.items);
   const itemCount = items.reduce((sum, i) => sum + i.quantity, 0);
@@ -65,6 +66,9 @@ export default function Cashier() {
 
   // USB Barcode Scanner — auto-detect rapid keystrokes + Enter
   const handleBarcodeScan = async (barcodeValue) => {
+    // The scanner typed the code into the focused search box — remove it so
+    // consecutive scans don't pile up and filter the product list.
+    searchRef.current?.removeScannedCode(barcodeValue);
     try {
       const { data: res } = await productAPI.getByBarcode(barcodeValue);
       const product = res.data;
@@ -85,7 +89,7 @@ export default function Cashier() {
       {/* Left: Product Search & List (1/4 = 25%) */}
       <div className="w-1/4 min-w-[320px] flex flex-col overflow-hidden border-r border-gray-200">
         <div className="p-3 pb-2">
-          <ProductSearch onSearch={setSearchQuery} />
+          <ProductSearch ref={searchRef} onSearch={setSearchQuery} />
         </div>
         <div className="flex-1 overflow-y-auto px-3 pb-3">
           <ProductGrid

@@ -1,4 +1,5 @@
 const prisma = require('../lib/prisma');
+const { Prisma } = require('@prisma/client');
 const { DEFAULT_PAGE_SIZE } = require('../utils/constants');
 const AppError = require('../utils/AppError');
 
@@ -42,6 +43,93 @@ const getModelDelegate = (tableName) => {
 
   return map[tableName] || null;
 };
+
+// ─── Aturan rollback ────────────────────────────────────────────────
+
+/**
+ * Tabel yang TIDAK boleh di-rollback dari audit log: perubahannya punya efek
+ * samping (stok, pergerakan stok, status dokumen, saldo proyek) yang tidak
+ * ikut dibalik bila hanya oldData yang ditulis ulang.
+ */
+const ROLLBACK_BLOCKED_TABLES = new Set([
+  'transactions',
+  'transaction_items',
+  'transaction_returns',
+  'transaction_return_items',
+  'purchase_orders',
+  'purchase_order_items',
+  'stock_movements',
+  'stock_opnames',
+  'stock_opname_items',
+  'projects',
+  'project_materials',
+]);
+
+// Field yang tidak pernah dipulihkan lewat rollback (semua tabel)
+const ROLLBACK_STRIP_FIELDS = new Set([
+  'id', 'createdAt', 'updatedAt', 'createdBy', 'updatedBy', 'deletedAt',
+  'stock', 'status', 'password',
+]);
+
+// Field tambahan per tabel (dijaga aturan bisnis lain, mis. admin aktif terakhir)
+const ROLLBACK_STRIP_FIELDS_BY_TABLE = {
+  users: new Set(['role', 'isActive']),
+};
+
+const ROLLBACK_ACTIONS = new Set([ACTION_TYPES.UPDATE, ACTION_TYPES.DELETE]);
+
+const getScalarFieldNames = (tableName) => {
+  const models = Prisma?.dmmf?.datamodel?.models;
+  if (!Array.isArray(models)) return null;
+  const model = models.find((m) => m.dbName === tableName);
+  if (!model) return null;
+  return new Set(model.fields.filter((f) => f.kind === 'scalar' || f.kind === 'enum').map((f) => f.name));
+};
+
+const isPlainValue = (value) => value === null
+  || ['string', 'number', 'boolean'].includes(typeof value)
+  || value instanceof Date;
+
+/**
+ * Ambil data yang aman dipulihkan dari oldData sebuah log.
+ * Hanya kolom skalar milik tabel tsb; buang id/timestamp/stok/status dan relasi.
+ */
+const buildRestoreData = (log) => {
+  if (!log?.oldData || typeof log.oldData !== 'object' || Array.isArray(log.oldData)) return {};
+  const scalarFields = getScalarFieldNames(log.entity);
+  const tableStrip = ROLLBACK_STRIP_FIELDS_BY_TABLE[log.entity];
+  const data = {};
+  for (const [key, value] of Object.entries(log.oldData)) {
+    if (ROLLBACK_STRIP_FIELDS.has(key)) continue;
+    if (tableStrip && tableStrip.has(key)) continue;
+    if (scalarFields && !scalarFields.has(key)) continue;
+    if (!isPlainValue(value)) continue; // relasi (array/objek) tidak dipulihkan
+    data[key] = value;
+  }
+  return data;
+};
+
+/**
+ * Alasan log tidak bisa di-rollback, atau null bila bisa.
+ */
+const getRollbackBlockReason = (log) => {
+  if (!ROLLBACK_ACTIONS.has(log.action)) {
+    return 'Hanya perubahan (UPDATE/DELETE) yang dapat di-rollback';
+  }
+  if (ROLLBACK_BLOCKED_TABLES.has(log.entity)) {
+    const label = ENTITY_LABELS[log.entity] || log.entity;
+    return `Rollback tidak diizinkan untuk data ${label} karena memengaruhi stok/status. Lakukan koreksi melalui menu terkait.`;
+  }
+  if (!log.oldData) return 'Tidak ada data lama untuk di-rollback';
+  if (!log.entityId) return 'ID record tidak ditemukan pada log ini';
+  if (!getModelDelegate(log.entity)) return `Tabel "${log.entity}" tidak dikenali untuk rollback`;
+  if (Object.keys(buildRestoreData(log)).length === 0) {
+    return 'Tidak ada data yang dapat dipulihkan dari log ini';
+  }
+  return null;
+};
+
+const canRollback = (log) => getRollbackBlockReason(log) === null;
 
 /**
  * Create an audit log entry.
@@ -184,6 +272,7 @@ const getLogs = async ({ page = 1, limit = DEFAULT_PAGE_SIZE, userId, tableName,
     ...log,
     module: ENTITY_LABELS[log.entity] || log.entity || '-',
     description: generateDescription(log),
+    canRollback: canRollback(log),
   }));
 
   return { data: enriched, total, page, limit };
@@ -209,7 +298,7 @@ const getLogById = async (id) => {
     throw new AppError('Log audit tidak ditemukan', 404);
   }
 
-  return log;
+  return { ...log, canRollback: canRollback(log) };
 };
 
 /**
@@ -231,18 +320,12 @@ const rollback = async (logId, userId) => {
     throw new AppError('Log audit tidak ditemukan', 404);
   }
 
-  if (!log.oldData) {
-    throw new AppError('Tidak ada data lama untuk di-rollback', 400);
-  }
-
-  if (!log.entityId) {
-    throw new AppError('ID record tidak ditemukan pada log ini', 400);
+  const blockReason = getRollbackBlockReason(log);
+  if (blockReason) {
+    throw new AppError(blockReason, 400);
   }
 
   const model = getModelDelegate(log.entity);
-  if (!model) {
-    throw new AppError(`Tabel "${log.entity}" tidak dikenali untuk rollback`, 400);
-  }
 
   // Get current state before rollback for the new audit log
   const currentRecord = await model.findUnique({ where: { id: log.entityId } });
@@ -251,11 +334,8 @@ const rollback = async (logId, userId) => {
     throw new AppError('Record yang akan di-rollback tidak ditemukan', 404);
   }
 
-  // Strip metadata fields that shouldn't be overwritten via rollback
-  const restoreData = { ...log.oldData };
-  delete restoreData.id;
-  delete restoreData.createdAt;
-  delete restoreData.updatedAt;
+  // Hanya kolom skalar yang aman (tanpa id/timestamp/stok/status/relasi)
+  const restoreData = buildRestoreData(log);
 
   // Update the record with old data
   const restored = await model.update({
@@ -282,4 +362,5 @@ module.exports = {
   getLogs,
   getLogById,
   rollback,
+  canRollback,
 };

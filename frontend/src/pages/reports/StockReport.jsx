@@ -114,7 +114,8 @@ export default function StockReport() {
   ];
 
   // ─── Export helpers ─────────────────────────────────
-  const getExportData = () => {
+  // forExcel: keep numbers as numbers so Excel can sum them
+  const getExportData = (forExcel = false) => {
     const headers = ['Produk', 'SKU', 'Kategori', 'Stok', 'Satuan', 'Stok Min.', 'Status', 'Nilai Stok (Rp)'];
     const rows = items.map((r) => [
       r.name,
@@ -124,7 +125,9 @@ export default function StockReport() {
       r.unitOfMeasure?.abbreviation || r.unit || '-',
       r.minStock,
       getStatusText(r),
-      formatNumber(r.stockValue || (r.stock * (r.buyPrice || 0))),
+      forExcel
+        ? Number(r.stockValue || (r.stock * (r.buyPrice || 0))) || 0
+        : formatNumber(r.stockValue || (r.stock * (r.buyPrice || 0))),
     ]);
     return { headers, rows };
   };
@@ -139,7 +142,7 @@ export default function StockReport() {
   };
 
   const handleExportExcel = () => {
-    const { headers, rows } = getExportData();
+    const { headers, rows } = getExportData(true);
     exportToExcel('Laporan Stok', headers, rows, 'laporan-stok.xlsx');
   };
 

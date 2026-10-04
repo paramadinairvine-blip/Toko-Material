@@ -198,6 +198,10 @@ const create = async (data, userId) => {
   return product;
 };
 
+// Field yang dikendalikan server — tidak boleh diubah lewat body update.
+// Stok hanya berubah lewat stock movement (PO, transaksi, retur, opname, penyesuaian).
+const UPDATE_PROTECTED_FIELDS = ['id', 'isActive', 'stock', 'createdBy', 'createdAt', 'updatedAt', 'updatedBy'];
+
 /**
  * Update a product. Records price history if prices changed.
  */
@@ -207,7 +211,9 @@ const update = async (id, data, userId) => {
     throw new AppError('Produk tidak ditemukan', 404);
   }
 
-  const { variants, units, ...productData } = data;
+  const { variants, units, ...rawProductData } = data;
+  const productData = { ...rawProductData };
+  for (const field of UPDATE_PROTECTED_FIELDS) delete productData[field];
 
   const product = await prisma.$transaction(async (tx) => {
     // Check if prices changed → record history
@@ -259,7 +265,7 @@ const update = async (id, data, userId) => {
               barcode: v.barcode || null,
               buyPrice: v.buyPrice || 0,
               sellPrice: v.sellPrice || 0,
-              ...(v.stock !== undefined ? { stock: v.stock } : {}),
+              // stok varian hanya berubah lewat stock movement
             },
           });
         } else {

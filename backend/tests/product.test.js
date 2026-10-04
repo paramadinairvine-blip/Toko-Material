@@ -90,6 +90,30 @@ describe('POST /api/products', () => {
   });
 });
 
+describe('PUT /api/products/:id — field yang dikendalikan server', () => {
+  test('tidak menulis stock/isActive/id/createdBy/timestamps dari body', async () => {
+    mockPrisma.product.findUnique.mockResolvedValue(sampleProduct);
+    mockPrisma.product.update.mockResolvedValue(sampleProduct);
+    mockPrisma.auditLog.create.mockResolvedValue({});
+
+    const res = await request(app)
+      .put('/api/products/prod-1')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        name: 'Semen Baru', categoryId: 'cat-1', stock: 5, isActive: false,
+        id: 'hack', createdBy: 'u-x', updatedBy: 'u-y',
+        createdAt: '2020-01-01T00:00:00Z', updatedAt: '2020-01-01T00:00:00Z',
+      });
+
+    expect(res.status).toBe(200);
+    const { data } = mockPrisma.product.update.mock.calls[0][0];
+    expect(data).toMatchObject({ name: 'Semen Baru', categoryId: 'cat-1', updatedBy: 'user-test-1' });
+    ['stock', 'isActive', 'id', 'createdBy', 'createdAt', 'updatedAt'].forEach((f) => {
+      expect(data).not.toHaveProperty(f);
+    });
+  });
+});
+
 describe('DELETE /api/products/:id', () => {
   test('should reject KASIR role', async () => {
     const res = await request(app)
