@@ -82,27 +82,17 @@ const adjustStock = async (req, res) => {
 
 const getAllOpname = async (req, res) => {
   try {
-    const prisma = require('../lib/prisma');
+    const { page, limit, search, dateFrom, dateTo } = req.query;
 
-    const { page, limit } = req.query;
-    const pageNum = parseInt(page) || 1;
-    const limitNum = parseInt(limit) || DEFAULT_PAGE_SIZE;
-    const skip = (pageNum - 1) * limitNum;
+    const result = await stockService.getAllOpname({
+      page: parseInt(page) || 1,
+      limit: parseInt(limit) || DEFAULT_PAGE_SIZE,
+      search,
+      dateFrom,
+      dateTo,
+    });
 
-    const [data, total] = await Promise.all([
-      prisma.stockOpname.findMany({
-        include: {
-          creator: { select: { id: true, fullName: true } },
-          _count: { select: { items: true } },
-        },
-        orderBy: { createdAt: 'desc' },
-        skip,
-        take: limitNum,
-      }),
-      prisma.stockOpname.count(),
-    ]);
-
-    return paginatedResponse(res, data, total, pageNum, limitNum, 'Daftar stock opname berhasil diambil');
+    return paginatedResponse(res, result.data, result.total, result.page, result.limit, 'Daftar stock opname berhasil diambil');
   } catch (err) {
     return errorResponse(res, err.message, err.status || 500);
   }
@@ -152,7 +142,12 @@ const updateOpnameItem = async (req, res) => {
       return errorResponse(res, 'Stok aktual wajib diisi', 400);
     }
 
-    const item = await stockService.updateOpnameItem(id, itemId, parseInt(actualStock));
+    const parsedStock = Number(actualStock);
+    if (actualStock === '' || !Number.isInteger(parsedStock) || parsedStock < 0) {
+      return errorResponse(res, 'Stok aktual harus berupa bilangan bulat minimal 0', 400);
+    }
+
+    const item = await stockService.updateOpnameItem(id, itemId, parsedStock);
     return successResponse(res, item, 'Item opname berhasil diperbarui');
   } catch (err) {
     return errorResponse(res, err.message, err.status || 500);

@@ -34,7 +34,7 @@ const mockPrisma = {
   purchaseOrderItem: { findMany: jest.fn(), findFirst: jest.fn(), create: jest.fn(), update: jest.fn() },
   stockMovement: { findMany: jest.fn(), create: jest.fn(), updateMany: jest.fn(), count: jest.fn() },
   stockOpname: { findMany: jest.fn(), findUnique: jest.fn(), create: jest.fn(), update: jest.fn(), updateMany: jest.fn(), count: jest.fn() },
-  stockOpnameItem: { findMany: jest.fn(), createMany: jest.fn(), update: jest.fn() },
+  stockOpnameItem: { findMany: jest.fn(), findUnique: jest.fn(), createMany: jest.fn(), update: jest.fn() },
   project: { findMany: jest.fn(), findUnique: jest.fn(), create: jest.fn(), update: jest.fn(), updateMany: jest.fn(), delete: jest.fn(), count: jest.fn() },
   projectMaterial: { findMany: jest.fn(), create: jest.fn(), createMany: jest.fn(), update: jest.fn(), delete: jest.fn() },
   user: { findMany: jest.fn(), findUnique: jest.fn(), create: jest.fn(), update: jest.fn(), delete: jest.fn(), count: jest.fn() },
