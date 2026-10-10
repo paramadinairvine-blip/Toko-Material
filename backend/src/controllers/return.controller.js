@@ -1,48 +1,48 @@
 const returnService = require('../services/return.service');
 const { successResponse, paginatedResponse } = require('../utils/responseHelper');
+const { parsePagination, parseStringParam } = require('../utils/queryParams');
 
 const getAll = async (req, res, next) => {
   try {
-    const { page, limit, search, startDate, endDate } = req.query;
-    const pageNum = parseInt(page) || 1;
-    const limitNum = parseInt(limit) || 20;
+    const { search, startDate, endDate } = req.query;
+    const { page, limit } = parsePagination(req.query);
     const { data, total } = await returnService.getAll({
-      page: pageNum,
-      limit: limitNum,
-      search,
-      startDate,
-      endDate,
+      page,
+      limit,
+      search: parseStringParam(search, 'search'),
+      startDate: parseStringParam(startDate, 'startDate'),
+      endDate: parseStringParam(endDate, 'endDate'),
     });
-    return paginatedResponse(res, data, total, pageNum, limitNum);
+    return paginatedResponse(res, data, total, page, limit);
   } catch (err) {
-    next(err);
+    return next(err);
   }
 };
 
 const getById = async (req, res, next) => {
   try {
     const data = await returnService.getById(req.params.id);
-    successResponse(res, data);
+    return successResponse(res, data);
   } catch (err) {
-    next(err);
+    return next(err);
   }
 };
 
 const getByTransaction = async (req, res, next) => {
   try {
     const data = await returnService.getByTransactionId(req.params.transactionId);
-    successResponse(res, data);
+    return successResponse(res, data);
   } catch (err) {
-    next(err);
+    return next(err);
   }
 };
 
 const create = async (req, res, next) => {
   try {
     const data = await returnService.create(req.body, req.user.id);
-    successResponse(res, data, 'Retur berhasil diproses', 201);
+    return successResponse(res, data, 'Retur berhasil diproses', 201);
   } catch (err) {
-    next(err);
+    return next(err);
   }
 };
 
