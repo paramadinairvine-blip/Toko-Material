@@ -99,6 +99,11 @@ export default function TransactionList() {
 
   const columns = [
     {
+      key: 'transactionNumber',
+      header: 'No. Transaksi',
+      render: (v) => <span className="font-mono text-sm font-medium text-gray-900">{v || '-'}</span>,
+    },
+    {
       key: 'createdAt',
       header: 'Tanggal',
       sortable: true,

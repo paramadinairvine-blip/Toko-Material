@@ -76,15 +76,19 @@ export default function StockReport() {
 
   const getStatusBadge = (item) => {
     if (item.stock <= 0) return <Badge variant="danger" size="sm">Habis</Badge>;
-    if (item.stock < item.minStock) return <Badge variant="warning" size="sm">Rendah</Badge>;
+    if (item.stock <= item.minStock) return <Badge variant="warning" size="sm">Rendah</Badge>;
     return <Badge variant="success" size="sm">Aman</Badge>;
   };
 
   const getStatusText = (item) => {
     if (item.stock <= 0) return 'Habis';
-    if (item.stock < item.minStock) return 'Rendah';
+    if (item.stock <= item.minStock) return 'Rendah';
     return 'Aman';
   };
+
+  // The report API returns category as a plain string; product lists return { name }
+  const getCategoryName = (item) =>
+    (typeof item.category === 'string' ? item.category : item.category?.name) || '-';
 
   const columns = [
     {
@@ -95,11 +99,11 @@ export default function StockReport() {
         </div>
       ),
     },
-    { key: 'category', header: 'Kategori', render: (_, row) => row.category?.name || '-' },
+    { key: 'category', header: 'Kategori', render: (_, row) => getCategoryName(row) },
     {
       key: 'stock', header: 'Stok', sortable: true,
       render: (_, row) => (
-        <span className={`font-semibold ${row.stock <= 0 ? 'text-red-600' : row.stock < row.minStock ? 'text-yellow-600' : 'text-gray-900'}`}>
+        <span className={`font-semibold ${row.stock <= 0 ? 'text-red-600' : row.stock <= row.minStock ? 'text-yellow-600' : 'text-gray-900'}`}>
           {row.stock}
         </span>
       ),
@@ -120,7 +124,7 @@ export default function StockReport() {
     const rows = items.map((r) => [
       r.name,
       r.sku,
-      r.category?.name || '-',
+      getCategoryName(r),
       r.stock,
       r.unitOfMeasure?.abbreviation || r.unit || '-',
       r.minStock,
@@ -229,7 +233,7 @@ export default function StockReport() {
                   <td style={{ border: '1px solid #d1d5db', padding: '3px 6px' }}>{i + 1}</td>
                   <td style={{ border: '1px solid #d1d5db', padding: '3px 6px' }}>{r.name}</td>
                   <td style={{ border: '1px solid #d1d5db', padding: '3px 6px' }}>{r.sku}</td>
-                  <td style={{ border: '1px solid #d1d5db', padding: '3px 6px' }}>{r.category?.name || '-'}</td>
+                  <td style={{ border: '1px solid #d1d5db', padding: '3px 6px' }}>{getCategoryName(r)}</td>
                   <td style={{ border: '1px solid #d1d5db', padding: '3px 6px', textAlign: 'right' }}>{r.stock}</td>
                   <td style={{ border: '1px solid #d1d5db', padding: '3px 6px' }}>{r.unitOfMeasure?.abbreviation || r.unit || '-'}</td>
                   <td style={{ border: '1px solid #d1d5db', padding: '3px 6px', textAlign: 'right' }}>{r.minStock}</td>

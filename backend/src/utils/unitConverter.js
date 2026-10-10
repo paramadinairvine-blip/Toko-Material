@@ -1,4 +1,5 @@
 const prisma = require('../lib/prisma');
+const AppError = require('./AppError');
 
 /**
  * Convert a quantity from one unit to another for a specific product.
@@ -20,7 +21,7 @@ const convert = async (quantity, fromUnitId, toUnitId, productId) => {
   });
 
   if (!fromProductUnit) {
-    throw new Error(`Unit konversi tidak ditemukan untuk unit asal pada produk ini`);
+    throw new AppError(`Unit konversi tidak ditemukan untuk unit asal pada produk ini`, 400);
   }
 
   const toProductUnit = await prisma.productUnit.findUnique({
@@ -28,7 +29,7 @@ const convert = async (quantity, fromUnitId, toUnitId, productId) => {
   });
 
   if (!toProductUnit) {
-    throw new Error(`Unit konversi tidak ditemukan untuk unit tujuan pada produk ini`);
+    throw new AppError(`Unit konversi tidak ditemukan untuk unit tujuan pada produk ini`, 400);
   }
 
   // Convert: source → base → target
@@ -55,7 +56,7 @@ const getBaseQuantity = async (quantity, unitId, productId) => {
   });
 
   if (!productUnit) {
-    throw new Error(`Unit konversi tidak ditemukan untuk produk ini`);
+    throw new AppError(`Unit konversi tidak ditemukan untuk produk ini`, 400);
   }
 
   return quantity * Number(productUnit.conversionFactor);

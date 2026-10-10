@@ -1,5 +1,8 @@
 const prisma = require('../lib/prisma');
 const { format, subMonths } = require('date-fns');
+const AppError = require('../utils/AppError');
+const { TRANSACTION_TYPES } = require('../utils/constants');
+const { parseDateParam, buildDateRange } = require('../utils/queryParams');
 
 const WIB_OFFSET_MS = 7 * 60 * 60 * 1000;
 
@@ -78,6 +81,78 @@ const getReceivedPurchaseTotal = async (dateFilter) => {
   return { total: Math.round(total * 100) / 100, poCount: poIds.length };
 };
 
+/**
+ * Stok dianggap menipis bila sudah MENYENTUH batas minimum (stok ≤ minStock),
+ * sama dengan aturan notifikasi stok. Produk tanpa batas minimum (0) tidak dihitung.
+ */
+const isLowStock = (product) => product.minStock > 0 && product.stock <= product.minStock;
+
+/**
+ * ID kategori beserta seluruh turunannya (sub-kategori di semua kedalaman).
+ */
+const getCategoryWithDescendantIds = async (categoryId) => {
+  const categories = (await prisma.category.findMany({ select: { id: true, parentId: true } })) || [];
+  const childrenOf = new Map();
+  categories.forEach((c) => {
+    if (!c.parentId) return;
+    if (!childrenOf.has(c.parentId)) childrenOf.set(c.parentId, []);
+    childrenOf.get(c.parentId).push(c.id);
+  });
+
+  const ids = new Set([categoryId]);
+  const queue = [categoryId];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    (childrenOf.get(current) || []).forEach((childId) => {
+      if (!ids.has(childId)) {
+        ids.add(childId);
+        queue.push(childId);
+      }
+    });
+  }
+  return [...ids];
+};
+
+/**
+ * Produk terlaris berdasarkan jumlah dalam SATUAN DASAR (baseQty; data lama
+ * tanpa baseQty memakai quantity) — menjumlahkan `quantity` lintas satuan
+ * (1 dus + 3 pcs = 4) menghasilkan peringkat yang salah.
+ */
+const getTopProductsByBaseQty = async (transactionWhere, take) => {
+  const items = (await prisma.transactionItem.findMany({
+    where: { transaction: transactionWhere },
+    select: { productId: true, quantity: true, baseQty: true, subtotal: true },
+  })) || [];
+
+  const totals = new Map();
+  items.forEach((item) => {
+    const qty = item.baseQty > 0 ? item.baseQty : item.quantity;
+    const row = totals.get(item.productId) || { productId: item.productId, totalQuantity: 0, totalValue: 0 };
+    row.totalQuantity += qty || 0;
+    row.totalValue += Number(item.subtotal || 0);
+    totals.set(item.productId, row);
+  });
+
+  const ranked = [...totals.values()].sort((a, b) => b.totalQuantity - a.totalQuantity || b.totalValue - a.totalValue);
+  const top = take ? ranked.slice(0, take) : ranked;
+
+  const ids = top.map((t) => t.productId);
+  const details = ids.length > 0
+    ? await prisma.product.findMany({
+        where: { id: { in: ids } },
+        select: { id: true, name: true, sku: true, unit: true },
+      })
+    : [];
+  const productMap = new Map((details || []).map((p) => [p.id, p]));
+
+  return top.map((t, idx) => ({
+    rank: idx + 1,
+    product: productMap.get(t.productId) || { id: t.productId, name: '-' },
+    totalQuantity: t.totalQuantity,
+    totalValue: Math.round(t.totalValue * 100) / 100,
+  }));
+};
+
 // ─── 1. Stock Report ────────────────────────────────────────────────
 
 /**
@@ -90,7 +165,8 @@ const getReceivedPurchaseTotal = async (dateFilter) => {
  */
 const getStockReport = async ({ categoryId, lowStockOnly = false } = {}) => {
   const where = { isActive: true };
-  if (categoryId) where.categoryId = categoryId;
+  // Memilih kategori induk ikut menampilkan produk di semua sub-kategorinya
+  if (categoryId) where.categoryId = { in: await getCategoryWithDescendantIds(categoryId) };
 
   const products = await prisma.product.findMany({
     where,
@@ -115,7 +191,7 @@ const getStockReport = async ({ categoryId, lowStockOnly = false } = {}) => {
     buyPrice: Number(p.buyPrice),
     sellPrice: Number(p.sellPrice),
     stockValue: Math.round(p.stock * Number(p.buyPrice)),
-    isLowStock: p.stock < p.minStock,
+    isLowStock: isLowStock(p),
     isOverStock: p.maxStock ? p.stock > p.maxStock : false,
   }));
 
@@ -143,17 +219,13 @@ const getStockReport = async ({ categoryId, lowStockOnly = false } = {}) => {
  * Financial report: purchases, expenditures by type/unit lembaga, outstanding BON.
  */
 const getFinancialReport = async ({ startDate, endDate, type } = {}) => {
-  const dateFilter = {};
-  // Accept both ISO strings (from frontend) and plain dates (YYYY-MM-DD)
-  if (startDate) {
-    const start = startDate.includes('T') ? new Date(startDate) : new Date(startDate + 'T00:00:00+07:00');
-    dateFilter.gte = start;
-  }
-  if (endDate) {
-    const end = endDate.includes('T') ? new Date(endDate) : new Date(endDate + 'T23:59:59.999+07:00');
-    dateFilter.lte = end;
-  }
+  // Accept both ISO strings (from frontend) and plain dates (YYYY-MM-DD = hari WIB)
+  const dateFilter = buildDateRange(startDate, endDate) || {};
   const hasDateFilter = Object.keys(dateFilter).length > 0;
+
+  if (type && !Object.values(TRANSACTION_TYPES).includes(type)) {
+    throw new AppError(`Parameter type harus salah satu dari: ${Object.values(TRANSACTION_TYPES).join(', ')}`, 400);
+  }
 
   // 2a. Total pembelian = nilai barang PO yang diterima dalam periode
   // (termasuk penerimaan parsial; bukan totalAmount PO yang receivedAt-nya di periode)
@@ -169,8 +241,11 @@ const getFinancialReport = async ({ startDate, endDate, type } = {}) => {
     select: { type: true, total: true, unitLembagaId: true },
   });
 
-  // 2b-2. Total retur dalam periode yang sama (tanpa retur dari transaksi batal)
-  const returnWhere = { ...NOT_CANCELLED_TX };
+  // 2b-2. Total retur dalam periode yang sama (tanpa retur dari transaksi batal).
+  // Dengan filter tipe, hanya retur dari transaksi bertipe sama yang mengurangi.
+  const returnWhere = type
+    ? { transaction: { ...NOT_CANCELLED_TX.transaction, type } }
+    : { ...NOT_CANCELLED_TX };
   if (hasDateFilter) returnWhere.createdAt = dateFilter;
 
   const returnAgg = await prisma.transactionReturn.aggregate({
@@ -270,8 +345,13 @@ const getFinancialReport = async ({ startDate, endDate, type } = {}) => {
  * Trend report: monthly expenditure, top products, top unit lembaga.
  */
 const getTrendReport = async ({ startDate, endDate, groupBy = 'month' } = {}) => {
-  const start = startDate ? new Date(startDate) : subMonths(new Date(), 11); // default last 12 months
-  const end = endDate ? new Date(endDate) : new Date();
+  // Tanggal polos (YYYY-MM-DD) = hari kalender WIB: awal hari … akhir hari,
+  // sehingga rentang satu hari (start = end) tetap berisi transaksi hari itu.
+  const start = parseDateParam(startDate, { name: 'startDate' }) || subMonths(new Date(), 11); // default last 12 months
+  const end = parseDateParam(endDate, { endOfDay: true, name: 'endDate' }) || new Date();
+  if (start > end) {
+    throw new AppError('Parameter startDate tidak boleh setelah endDate', 400);
+  }
 
   // 3a. Monthly expenditure trend
   const transactions = await prisma.transaction.findMany({
@@ -305,34 +385,11 @@ const getTrendReport = async ({ startDate, endDate, groupBy = 'month' } = {}) =>
     .map((m) => ({ ...m, netTotal: m.total - m.returnTotal }))
     .sort((a, b) => a.month.localeCompare(b.month));
 
-  // 3b. All issued products sorted by quantity
-  const topProducts = await prisma.transactionItem.groupBy({
-    by: ['productId'],
-    where: {
-      transaction: {
-        status: { not: 'CANCELLED' },
-        createdAt: { gte: start, lte: end },
-      },
-    },
-    _sum: { quantity: true, subtotal: true },
-    orderBy: { _sum: { quantity: 'desc' } },
+  // 3b. All issued products sorted by quantity (satuan dasar)
+  const topProductsFormatted = await getTopProductsByBaseQty({
+    status: { not: 'CANCELLED' },
+    createdAt: { gte: start, lte: end },
   });
-
-  const topProductIds = topProducts.map((tp) => tp.productId);
-  const topProductDetails = topProductIds.length > 0
-    ? await prisma.product.findMany({
-        where: { id: { in: topProductIds } },
-        select: { id: true, name: true, sku: true, unit: true },
-      })
-    : [];
-  const productMap = new Map(topProductDetails.map((p) => [p.id, p]));
-
-  const topProductsFormatted = topProducts.map((tp, idx) => ({
-    rank: idx + 1,
-    product: productMap.get(tp.productId) || { id: tp.productId, name: '-' },
-    totalQuantity: tp._sum.quantity || 0,
-    totalValue: Number(tp._sum.subtotal || 0),
-  }));
 
   // 3c. Top unit lembaga by expenditure
   const unitTx = await prisma.transaction.findMany({
@@ -408,13 +465,7 @@ const getTrendReport = async ({ startDate, endDate, groupBy = 'month' } = {}) =>
  * Laporan Laba Rugi: Pendapatan - HPP = Laba Kotor.
  */
 const getLabaRugiReport = async ({ startDate, endDate } = {}) => {
-  const dateFilter = {};
-  if (startDate) {
-    dateFilter.gte = startDate.includes('T') ? new Date(startDate) : new Date(startDate + 'T00:00:00+07:00');
-  }
-  if (endDate) {
-    dateFilter.lte = endDate.includes('T') ? new Date(endDate) : new Date(endDate + 'T23:59:59.999+07:00');
-  }
+  const dateFilter = buildDateRange(startDate, endDate) || {};
   const hasDateFilter = Object.keys(dateFilter).length > 0;
 
   // ── A. PENDAPATAN ──────────────────────────────────────
@@ -462,10 +513,12 @@ const getLabaRugiReport = async ({ startDate, endDate } = {}) => {
   const txItems = await prisma.transactionItem.findMany({
     where: txItemWhere,
     select: {
+      transactionId: true,
       quantity: true,
       baseQty: true,
       subtotal: true,
       product: productSelect,
+      transaction: { select: { total: true } },
     },
   });
 
@@ -477,23 +530,45 @@ const getLabaRugiReport = async ({ startDate, endDate } = {}) => {
   const returnItems = await prisma.transactionReturnItem.findMany({
     where: returnItemWhere,
     select: {
+      transactionReturnId: true,
       quantity: true,
       baseQty: true,
       subtotal: true,
       product: productSelect,
+      transactionReturn: { select: { refundAmount: true } },
     },
   });
+
+  // Pendapatan per item dialokasikan proporsional dari nilai header:
+  //   penjualan → total transaksi (sudah termasuk diskon header & pajak)
+  //   retur     → refundAmount retur
+  // sehingga jumlah rincian per kategori/produk = netRevenue di ringkasan.
+  const buildAllocator = (items, groupKey, headerAmount) => {
+    const subtotalByGroup = new Map();
+    items.forEach((item) => {
+      const key = item[groupKey];
+      subtotalByGroup.set(key, (subtotalByGroup.get(key) || 0) + Number(item.subtotal));
+    });
+    return (item) => {
+      const header = headerAmount(item);
+      const groupSubtotal = subtotalByGroup.get(item[groupKey]) || 0;
+      if (header === null || header === undefined || groupSubtotal <= 0) return Number(item.subtotal);
+      return Number(item.subtotal) * (Number(header) / groupSubtotal);
+    };
+  };
+  const saleRevenueOf = buildAllocator(txItems, 'transactionId', (item) => item.transaction?.total);
+  const returnRevenueOf = buildAllocator(returnItems || [], 'transactionReturnId', (item) => item.transactionReturn?.refundAmount);
 
   // Hitung total HPP (qty dalam satuan dasar × buyPrice per satuan dasar)
   let totalHPP = 0;
   const categoryHPPMap = {};
   const productMarginMap = {};
 
-  const accumulate = (item, sign) => {
+  const accumulate = (item, sign, revenueOf) => {
     const buyPrice = Number(item.product.buyPrice);
     const qty = item.baseQty > 0 ? item.baseQty : item.quantity;
     const hpp = sign * qty * buyPrice;
-    const revenue = sign * Number(item.subtotal);
+    const revenue = sign * revenueOf(item);
     totalHPP = Math.round(totalHPP + hpp);
 
     // HPP per kategori
@@ -503,7 +578,7 @@ const getLabaRugiReport = async ({ startDate, endDate } = {}) => {
       categoryHPPMap[catId] = { categoryName: catName, totalHPP: 0, totalRevenue: 0 };
     }
     categoryHPPMap[catId].totalHPP = Math.round(categoryHPPMap[catId].totalHPP + hpp);
-    categoryHPPMap[catId].totalRevenue = Math.round(categoryHPPMap[catId].totalRevenue + revenue);
+    categoryHPPMap[catId].totalRevenue += revenue;
 
     // Per-product margin aggregation
     const prodId = item.product.id;
@@ -518,12 +593,26 @@ const getLabaRugiReport = async ({ startDate, endDate } = {}) => {
       };
     }
     productMarginMap[prodId].totalQty += sign * qty;
-    productMarginMap[prodId].totalRevenue = Math.round(productMarginMap[prodId].totalRevenue + revenue);
+    productMarginMap[prodId].totalRevenue += revenue;
     productMarginMap[prodId].totalHPP = Math.round(productMarginMap[prodId].totalHPP + hpp);
   };
 
-  txItems.forEach((item) => accumulate(item, 1));
-  (returnItems || []).forEach((item) => accumulate(item, -1));
+  txItems.forEach((item) => accumulate(item, 1, saleRevenueOf));
+  (returnItems || []).forEach((item) => accumulate(item, -1, returnRevenueOf));
+
+  // Bulatkan pendapatan rincian; selisih pembulatan (beberapa rupiah) dibebankan
+  // ke baris terbesar supaya jumlah rincian persis sama dengan netRevenue.
+  const settleRounding = (rows) => {
+    rows.forEach((row) => { row.totalRevenue = Math.round(row.totalRevenue); });
+    if (rows.length === 0) return;
+    const diff = netRevenue - rows.reduce((sum, row) => sum + row.totalRevenue, 0);
+    if (diff !== 0 && Math.abs(diff) <= rows.length) {
+      const largest = rows.reduce((a, b) => (Math.abs(b.totalRevenue) > Math.abs(a.totalRevenue) ? b : a));
+      largest.totalRevenue += diff;
+    }
+  };
+  settleRounding(Object.values(categoryHPPMap));
+  settleRounding(Object.values(productMarginMap));
 
   const grossProfit = Math.round(netRevenue - totalHPP);
   const grossMarginPercent = netRevenue > 0
@@ -580,19 +669,9 @@ const getLabaRugiReport = async ({ startDate, endDate } = {}) => {
 const getDashboardSummary = async ({ startDate, endDate } = {}) => {
   // Default: bulan berjalan menurut kalender WIB (bukan zona waktu server)
   const currentMonth = wibMonthRange(new Date());
-  let monthStart;
-  if (startDate) {
-    monthStart = startDate.includes('T') ? new Date(startDate) : new Date(startDate + 'T00:00:00+07:00');
-  } else {
-    monthStart = currentMonth.start;
-  }
+  const monthStart = parseDateParam(startDate, { name: 'startDate' }) || currentMonth.start;
   // Ensure endDate covers the full day (23:59:59.999 WIB)
-  let monthEnd;
-  if (endDate) {
-    monthEnd = endDate.includes('T') ? new Date(endDate) : new Date(endDate + 'T23:59:59.999+07:00');
-  } else {
-    monthEnd = currentMonth.end;
-  }
+  const monthEnd = parseDateParam(endDate, { endOfDay: true, name: 'endDate' }) || currentMonth.end;
   const chartStart = wibMonthRange(monthStart, -5).start;
 
   // Run all queries in parallel
@@ -629,9 +708,9 @@ const getDashboardSummary = async ({ startDate, endDate } = {}) => {
       select: { id: true, name: true, sku: true, stock: true, minStock: true, unit: true },
     }),
 
-    // Active POs (DRAFT or SENT)
+    // Active POs: belum selesai diterima (termasuk yang baru diterima sebagian)
     prisma.purchaseOrder.count({
-      where: { status: { in: ['DRAFT', 'SENT'] } },
+      where: { status: { in: ['DRAFT', 'SENT', 'PARTIALLY_RECEIVED'] } },
     }),
 
     // Active projects
@@ -656,7 +735,7 @@ const getDashboardSummary = async ({ startDate, endDate } = {}) => {
   ));
 
   // Low stock
-  const lowStock = lowStockProducts.filter((p) => p.stock < p.minStock);
+  const lowStock = lowStockProducts.filter(isLowStock);
 
   // Monthly retur
   const monthlyReturnAgg = await prisma.transactionReturn.aggregate({
@@ -699,35 +778,11 @@ const getDashboardSummary = async ({ startDate, endDate } = {}) => {
     netTotal: m.total - m.returnTotal,
   }));
 
-  // Top 5 products (by transaction quantity this month)
-  const monthItems = await prisma.transactionItem.groupBy({
-    by: ['productId'],
-    where: {
-      transaction: {
-        status: { not: 'CANCELLED' },
-        createdAt: { gte: monthStart, lte: monthEnd },
-      },
-    },
-    _sum: { quantity: true, subtotal: true },
-    orderBy: { _sum: { quantity: 'desc' } },
-    take: 5,
-  });
-
-  const topIds = monthItems.map((i) => i.productId);
-  const topDetails = topIds.length > 0
-    ? await prisma.product.findMany({
-        where: { id: { in: topIds } },
-        select: { id: true, name: true, sku: true, unit: true },
-      })
-    : [];
-  const topMap = new Map(topDetails.map((p) => [p.id, p]));
-
-  const topProducts = monthItems.map((i, idx) => ({
-    rank: idx + 1,
-    product: topMap.get(i.productId) || { id: i.productId, name: '-' },
-    totalQuantity: i._sum.quantity || 0,
-    totalValue: Number(i._sum.subtotal || 0),
-  }));
+  // Top 5 products (by transaction quantity this month, satuan dasar)
+  const topProducts = await getTopProductsByBaseQty({
+    status: { not: 'CANCELLED' },
+    createdAt: { gte: monthStart, lte: monthEnd },
+  }, 5);
 
   return {
     totalProducts,

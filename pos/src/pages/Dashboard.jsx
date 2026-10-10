@@ -70,7 +70,8 @@ export default function Dashboard() {
     queryKey: ['dashboard-returns', appliedStart, appliedEnd],
     queryFn: () => returnAPI.getAll({ startDate: startISO, endDate: endISO, limit: 500 }),
     select: (res) => {
-      const list = res.data.data || [];
+      // Retur dari transaksi yang sudah dibatalkan tidak dihitung lagi
+      const list = (res.data.data || []).filter((r) => r.transaction?.status !== 'CANCELLED');
       const totalRetur = list.reduce((sum, r) => sum + (parseFloat(r.refundAmount) || 0), 0);
       return { totalRetur, count: list.length };
     },

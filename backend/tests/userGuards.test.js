@@ -112,3 +112,63 @@ describe('PUT /api/users/:id/change-password', () => {
     });
   });
 });
+
+describe('User yang sudah dihapus (soft delete)', () => {
+  const deleted = { ...kasir, isActive: false, deletedAt: new Date('2026-10-01T00:00:00Z') };
+
+  test.each([
+    [{ isActive: true }],
+    [{ fullName: 'Nama Baru' }],
+    [{ role: 'ADMIN' }],
+  ])('PUT %j → 404, tidak bisa dihidupkan/diubah', async (body) => {
+    mockUserFindUnique(deleted);
+
+    const res = await putUser('kasir-9', body);
+
+    expect(res.status).toBe(404);
+    expect(mockPrisma.user.update).not.toHaveBeenCalled();
+  });
+
+  test('ganti password → 404', async () => {
+    mockUserFindUnique(deleted);
+
+    const res = await request(app)
+      .put('/api/users/kasir-9/change-password')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ newPassword: 'rahasia-baru' });
+
+    expect(res.status).toBe(404);
+    expect(mockPrisma.user.update).not.toHaveBeenCalled();
+  });
+
+  test('token milik user yang sudah dihapus ditolak middleware auth', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue({ id: 'user-test-1', role: 'ADMIN', isActive: true, deletedAt: new Date() });
+
+    const res = await request(app).get('/api/users').set('Authorization', `Bearer ${adminToken}`);
+
+    expect(res.status).toBe(403);
+  });
+
+  test('login user yang sudah dihapus → 401 walau isActive terlanjur true', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue({ ...deleted, isActive: true, email: 'k9@material.dn2' });
+
+    const res = await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'k9@material.dn2', password: 'rahasia1' });
+
+    expect(res.status).toBe(401);
+    expect(mockPrisma.refreshToken.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('PUT /api/users/:id — email duplikat', () => {
+  test('email milik user lain → 409', async () => {
+    mockUserFindUnique(kasir);
+    mockPrisma.user.findFirst.mockResolvedValue({ email: 'a2@material.dn2', username: 'admin2' });
+
+    const res = await putUser('kasir-9', { email: 'a2@material.dn2' });
+
+    expect(res.status).toBe(409);
+    expect(mockPrisma.user.update).not.toHaveBeenCalled();
+  });
+});

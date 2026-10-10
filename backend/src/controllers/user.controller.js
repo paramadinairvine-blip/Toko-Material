@@ -3,7 +3,8 @@ const bcrypt = require('bcryptjs');
 const { successResponse, errorResponse, paginatedResponse } = require('../utils/responseHelper');
 const { createLog, ACTION_TYPES } = require('../services/auditLog.service');
 const { hashPassword } = require('../services/auth.service');
-const { DEFAULT_PAGE_SIZE, ROLES } = require('../utils/constants');
+const { ROLES } = require('../utils/constants');
+const { parsePagination, parseEnumParam } = require('../utils/queryParams');
 
 const userSelect = {
   id: true,
@@ -39,13 +40,29 @@ const hasOtherActiveAdmin = async (userId) => {
   return count > 0;
 };
 
-const getAll = async (req, res) => {
+/**
+ * Pesan bentrok bila email / username sudah dipakai user lain, atau null.
+ */
+const findDuplicateUser = async ({ email, username, excludeId }) => {
+  const or = [];
+  if (email) or.push({ email });
+  if (username) or.push({ username });
+  if (or.length === 0) return null;
+
+  const where = { OR: or };
+  if (excludeId) where.id = { not: excludeId };
+  const found = await prisma.user.findFirst({ where, select: { email: true, username: true } });
+  if (!found) return null;
+  return email && found.email === email
+    ? 'Email tersebut sudah digunakan user lain'
+    : 'Username tersebut sudah digunakan user lain';
+};
+
+const getAll = async (req, res, next) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || DEFAULT_PAGE_SIZE;
-    const search = req.query.search || '';
-    const role = req.query.role;
-    const skip = (page - 1) * limit;
+    const { page, limit, skip } = parsePagination(req.query);
+    const search = typeof req.query.search === 'string' ? req.query.search : '';
+    const role = parseEnumParam(req.query.role, Object.values(ROLES), 'role');
 
     const where = { deletedAt: null };
     if (role) where.role = role;
@@ -64,11 +81,11 @@ const getAll = async (req, res) => {
 
     return paginatedResponse(res, data, total, page, limit, 'Daftar user berhasil diambil');
   } catch (err) {
-    return errorResponse(res, err.message, err.status || 500);
+    return next(err);
   }
 };
 
-const getById = async (req, res) => {
+const getById = async (req, res, next) => {
   try {
     const user = await prisma.user.findUnique({
       where: { id: req.params.id },
@@ -79,15 +96,19 @@ const getById = async (req, res) => {
 
     return successResponse(res, user, 'Detail user berhasil diambil');
   } catch (err) {
-    return errorResponse(res, err.message, err.status || 500);
+    return next(err);
   }
 };
 
-const create = async (req, res) => {
+const create = async (req, res, next) => {
   try {
     const { username, email, password, fullName, phone, role } = req.body;
     // Auto-generate username from email if not provided
     const finalUsername = username || email.split('@')[0];
+
+    // Email/username unik (termasuk milik user yang sudah dihapus) → 409 yang jelas
+    const duplicate = await findDuplicateUser({ email, username: finalUsername });
+    if (duplicate) return errorResponse(res, duplicate, 409);
 
     const hashedPassword = await hashPassword(password);
 
@@ -108,15 +129,16 @@ const create = async (req, res) => {
 
     return successResponse(res, user, 'User berhasil dibuat', 201);
   } catch (err) {
-    return errorResponse(res, err.message, err.status || 500);
+    return next(err);
   }
 };
 
-const update = async (req, res) => {
+const update = async (req, res, next) => {
   try {
     const { id } = req.params;
     const existing = await prisma.user.findUnique({ where: { id } });
-    if (!existing) return errorResponse(res, 'User tidak ditemukan', 404);
+    // User yang sudah dihapus (soft delete) tidak boleh diubah / dihidupkan kembali
+    if (!existing || existing.deletedAt) return errorResponse(res, 'User tidak ditemukan', 404);
 
     const { username, email, fullName, phone, role, isActive } = req.body;
 
@@ -144,6 +166,13 @@ const update = async (req, res) => {
       return errorResponse(res, 'Minimal harus ada satu ADMIN aktif', 400);
     }
 
+    const duplicate = await findDuplicateUser({
+      email: updateData.email !== existing.email ? updateData.email : undefined,
+      username: updateData.username !== existing.username ? updateData.username : undefined,
+      excludeId: id,
+    });
+    if (duplicate) return errorResponse(res, duplicate, 409);
+
     const user = await prisma.user.update({
       where: { id },
       data: updateData,
@@ -167,11 +196,11 @@ const update = async (req, res) => {
 
     return successResponse(res, user, 'User berhasil diperbarui');
   } catch (err) {
-    return errorResponse(res, err.message, err.status || 500);
+    return next(err);
   }
 };
 
-const remove = async (req, res) => {
+const remove = async (req, res, next) => {
   try {
     const { id } = req.params;
     const existing = await prisma.user.findUnique({ where: { id } });
@@ -208,11 +237,11 @@ const remove = async (req, res) => {
 
     return successResponse(res, null, 'User berhasil dihapus');
   } catch (err) {
-    return errorResponse(res, err.message, err.status || 500);
+    return next(err);
   }
 };
 
-const changePassword = async (req, res) => {
+const changePassword = async (req, res, next) => {
   try {
     const { id } = req.params;
     const { oldPassword, newPassword } = req.body;
@@ -223,7 +252,7 @@ const changePassword = async (req, res) => {
     }
 
     const user = await prisma.user.findUnique({ where: { id } });
-    if (!user) return errorResponse(res, 'User tidak ditemukan', 404);
+    if (!user || user.deletedAt) return errorResponse(res, 'User tidak ditemukan', 404);
 
     // Non-admin must provide old password
     if (req.user.role !== ROLES.ADMIN) {
@@ -260,7 +289,7 @@ const changePassword = async (req, res) => {
 
     return successResponse(res, null, 'Password berhasil diubah');
   } catch (err) {
-    return errorResponse(res, err.message, err.status || 500);
+    return next(err);
   }
 };
 

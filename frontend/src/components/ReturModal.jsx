@@ -1,9 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import { returnAPI } from '../api/endpoints';
 import { getErrorMessage } from '../utils/handleError';
 import { formatRupiah } from '../utils/formatCurrency';
+import { calcRefundPreview } from '../utils/refundPreview';
 import { Modal, Button } from './common';
 
 export default function ReturModal({ transaction, onClose }) {
@@ -32,8 +33,16 @@ export default function ReturModal({ transaction, onClose }) {
 
   const createMutation = useMutation({
     mutationFn: (data) => returnAPI.create(data),
-    onSuccess: () => {
-      toast.success('Retur berhasil diproses');
+    onSuccess: (res) => {
+      // Show the refund actually recorded by the server
+      const refund = res?.data?.data?.refundAmount;
+      toast.success(
+        refund !== undefined && refund !== null
+          ? `Retur berhasil diproses. Refund: ${formatRupiah(refund)}`
+          : 'Retur berhasil diproses',
+        { duration: 6000 }
+      );
+      queryClient.invalidateQueries({ queryKey: ['returns-by-transaction', transaction.id] });
       queryClient.invalidateQueries({ queryKey: ['transaction'] });
       queryClient.invalidateQueries({ queryKey: ['transactions'] });
       queryClient.invalidateQueries({ queryKey: ['returns'] });
@@ -62,10 +71,11 @@ export default function ReturModal({ transaction, onClose }) {
     });
   };
 
-  const totalRefund = (transaction.items || []).reduce((sum, item) => {
-    const qty = quantities[item.id] || 0;
-    return sum + qty * Number(item.price || item.unitPrice || 0);
-  }, 0);
+  // Same calculation as the server (item & transaction discounts included)
+  const { perItem: refundPerItem, total: totalRefund } = calcRefundPreview(transaction, quantities, existingReturns);
+  const hasSelection = Object.values(quantities).some((q) => q > 0);
+  const hasDiscount = Number(transaction.discount) > 0
+    || (transaction.items || []).some((i) => Number(i.discount) > 0);
 
   return (
     <Modal
@@ -80,7 +90,7 @@ export default function ReturModal({ transaction, onClose }) {
             variant="primary"
             loading={createMutation.isPending}
             onClick={handleSubmit}
-            disabled={totalRefund === 0}
+            disabled={!hasSelection}
           >
             Proses Retur ({formatRupiah(totalRefund)})
           </Button>
@@ -99,7 +109,7 @@ export default function ReturModal({ transaction, onClose }) {
                 <th className="text-center px-3 py-2 font-medium text-gray-600 w-24">Maks</th>
                 <th className="text-center px-3 py-2 font-medium text-gray-600 w-28">Qty Retur</th>
                 <th className="text-right px-3 py-2 font-medium text-gray-600 w-28">Harga</th>
-                <th className="text-right px-3 py-2 font-medium text-gray-600 w-32">Subtotal</th>
+                <th className="text-right px-3 py-2 font-medium text-gray-600 w-32">Refund</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -108,7 +118,7 @@ export default function ReturModal({ transaction, onClose }) {
                 const maxReturnable = item.quantity - alreadyReturned;
                 const qty = quantities[item.id] || 0;
                 const price = Number(item.price || item.unitPrice || 0);
-                const subtotal = qty * price;
+                const subtotal = refundPerItem[item.id] || 0;
 
                 return (
                   <tr key={item.id} className={maxReturnable <= 0 ? 'opacity-40' : ''}>
@@ -159,10 +169,15 @@ export default function ReturModal({ transaction, onClose }) {
         </div>
 
         {/* Total */}
-        {totalRefund > 0 && (
-          <div className="bg-red-50 border border-red-200 rounded-lg p-3 flex justify-between items-center">
-            <span className="text-sm font-medium text-red-700">Total Refund</span>
-            <span className="text-lg font-bold text-red-600">{formatRupiah(totalRefund)}</span>
+        {hasSelection && (
+          <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+            <div className="flex justify-between items-center">
+              <span className="text-sm font-medium text-red-700">Total Refund</span>
+              <span className="text-lg font-bold text-red-600">{formatRupiah(totalRefund)}</span>
+            </div>
+            {hasDiscount && (
+              <p className="text-xs text-red-600 mt-1">Sudah memperhitungkan diskon pada transaksi ini.</p>
+            )}
           </div>
         )}
       </div>

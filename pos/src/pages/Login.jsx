@@ -22,6 +22,10 @@ export default function Login() {
       toast.success('Login berhasil!');
       navigate(from, { replace: true });
     } catch (err) {
+      if (err.code === 'NO_POS_ACCESS') {
+        toast.error(err.message, { duration: 6000 });
+        return;
+      }
       toast.error(getErrorMessage(err, 'Login gagal. Periksa email dan password.'));
     }
   };

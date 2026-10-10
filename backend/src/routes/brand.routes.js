@@ -10,7 +10,14 @@ const { handleValidationErrors } = require('../middlewares/validator');
 const validateBrand = [
   body('name')
     .notEmpty().withMessage('Nama brand wajib diisi')
+    .isString().withMessage('Nama brand tidak valid')
+    .bail()
+    .trim()
     .isLength({ min: 2 }).withMessage('Nama brand minimal 2 karakter'),
+  body('isActive')
+    .optional()
+    .isBoolean().withMessage('Status aktif harus berupa boolean')
+    .toBoolean(),
   handleValidationErrors,
 ];
 

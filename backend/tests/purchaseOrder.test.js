@@ -92,9 +92,11 @@ describe('POST /api/purchase-orders', () => {
 
   test('KASIR should create PO', async () => {
     mockPrisma.purchaseOrder.create.mockResolvedValue(samplePO);
-    mockPrisma.supplier.findUnique.mockResolvedValue({ id: 's-1', name: 'PT Test' });
-    mockPrisma.product.findUnique.mockResolvedValue({ id: 'p-1', name: 'Semen', buyPrice: 50000 });
-    mockPrisma.purchaseOrder.count.mockResolvedValue(0);
+    mockPrisma.purchaseOrder.findFirst.mockResolvedValue(null);
+    mockPrisma.purchaseOrder.findUnique.mockResolvedValue(samplePO);
+    mockPrisma.purchaseOrderItem.create.mockResolvedValue({});
+    mockPrisma.supplier.findUnique.mockResolvedValue({ id: 's-1', name: 'PT Test', isActive: true });
+    mockPrisma.product.findMany.mockResolvedValue([{ id: 'p-1', name: 'Semen', unitId: null, isActive: true }]);
     mockPrisma.auditLog.create.mockResolvedValue({});
 
     const res = await request(app)
@@ -105,8 +107,10 @@ describe('POST /api/purchase-orders', () => {
         items: [{ productId: 'p-1', quantity: 50, unitPrice: 20000 }],
       });
 
-    // May fail validation or succeed depending on service implementation
-    expect([200, 201, 422, 500]).toContain(res.status);
+    expect(res.status).toBe(201);
+    expect(mockPrisma.purchaseOrderItem.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ productId: 'p-1', quantity: 50, baseQty: 50, price: 20000, subtotal: 1000000 }),
+    }));
   });
 });
 
@@ -145,6 +149,7 @@ describe('PUT /api/purchase-orders/:id (validasi)', () => {
 
   test('memetakan unitPrice → price lalu menyimpan item', async () => {
     mockPrisma.purchaseOrder.findUnique.mockResolvedValue(draftPO);
+    mockPrisma.product.findMany.mockResolvedValue([{ id: 'p-1', name: 'Semen', unitId: null, isActive: true }]);
     mockPrisma.purchaseOrderItem.deleteMany.mockResolvedValue({});
     mockPrisma.purchaseOrderItem.create.mockResolvedValue({});
     mockPrisma.purchaseOrder.update.mockResolvedValue({});

@@ -32,6 +32,7 @@ function ProgressBar({ value, height = 'h-2', className = '' }) {
 // ─── Update Material Usage Modal ──────────────────────
 function UpdateUsageModal({ material, projectId, onClose }) {
   const queryClient = useQueryClient();
+  const { isAdmin } = useAuth();
   const [usedQty, setUsedQty] = useState(material.usedQty?.toString() || '0');
 
   const mutation = useMutation({
@@ -45,12 +46,29 @@ function UpdateUsageModal({ material, projectId, onClose }) {
     onError: (err) => toast.error(getErrorMessage(err, 'Gagal memperbarui')),
   });
 
-  const minQty = material.usedQty || 0;
+  // ADMIN may lower the value to correct a wrong entry; other roles can only add usage
+  const currentQty = Number(material.usedQty) || 0;
+  const minQty = isAdmin ? 0 : currentQty;
+  const estimatedQty = Number(material.estimatedQty) || 0;
+  const unitLabel = material.unit?.name || material.product?.unit || '';
+  const parsedQty = parseFloat(usedQty);
+  const belowMin = !isNaN(parsedQty) && parsedQty < minQty;
+  const overEstimate = !isNaN(parsedQty) && parsedQty > estimatedQty;
 
   const handleSubmit = () => {
     const qty = parseFloat(usedQty);
     if (isNaN(qty) || qty < minQty) {
       toast.error(`Jumlah tidak boleh kurang dari ${minQty}`);
+      return;
+    }
+    if (qty > estimatedQty && !window.confirm(
+      `Qty terpakai (${qty} ${unitLabel}) melebihi estimasi (${estimatedQty} ${unitLabel}). Tetap simpan?`
+    )) {
+      return;
+    }
+    if (qty < currentQty && !window.confirm(
+      `Qty terpakai akan dikoreksi turun dari ${currentQty} menjadi ${qty} ${unitLabel}. Lanjutkan?`
+    )) {
       return;
     }
     mutation.mutate({ usedQty: qty });
@@ -93,9 +111,16 @@ function UpdateUsageModal({ material, projectId, onClose }) {
           min={minQty}
           value={usedQty}
           onChange={(e) => setUsedQty(e.target.value)}
-          helperText={`Minimal ${minQty} (tidak bisa dikurangi)`}
-          error={(parseFloat(usedQty) || 0) < minQty ? `Tidak boleh kurang dari ${minQty}` : ''}
+          helperText={isAdmin
+            ? 'Admin dapat mengisi nilai lebih kecil untuk koreksi'
+            : `Minimal ${minQty} (tidak bisa dikurangi)`}
+          error={belowMin ? `Tidak boleh kurang dari ${minQty}` : ''}
         />
+        {overEstimate && (
+          <p className="text-xs text-yellow-700 bg-yellow-50 border border-yellow-200 rounded-lg px-3 py-2">
+            Melebihi estimasi ({estimatedQty} {unitLabel}). Anda akan diminta konfirmasi saat menyimpan.
+          </p>
+        )}
       </div>
     </Modal>
   );

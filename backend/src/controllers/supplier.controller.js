@@ -1,14 +1,12 @@
 const prisma = require('../lib/prisma');
 const { successResponse, errorResponse, paginatedResponse } = require('../utils/responseHelper');
 const { createLog, ACTION_TYPES } = require('../services/auditLog.service');
-const { DEFAULT_PAGE_SIZE } = require('../utils/constants');
+const { parsePagination } = require('../utils/queryParams');
 
-const getAll = async (req, res) => {
+const getAll = async (req, res, next) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || DEFAULT_PAGE_SIZE;
-    const search = req.query.search || '';
-    const skip = (page - 1) * limit;
+    const { page, limit, skip } = parsePagination(req.query);
+    const search = typeof req.query.search === 'string' ? req.query.search : '';
 
     const where = { isActive: true };
     if (search) {
@@ -34,11 +32,11 @@ const getAll = async (req, res) => {
 
     return paginatedResponse(res, data, total, page, limit, 'Daftar supplier berhasil diambil');
   } catch (err) {
-    return errorResponse(res, err.message, err.status || 500);
+    return next(err);
   }
 };
 
-const getById = async (req, res) => {
+const getById = async (req, res, next) => {
   try {
     const supplier = await prisma.supplier.findUnique({
       where: { id: req.params.id },
@@ -62,11 +60,11 @@ const getById = async (req, res) => {
 
     return successResponse(res, supplier, 'Detail supplier berhasil diambil');
   } catch (err) {
-    return errorResponse(res, err.message, err.status || 500);
+    return next(err);
   }
 };
 
-const create = async (req, res) => {
+const create = async (req, res, next) => {
   try {
     const { name, contactName, phone, email, address } = req.body;
 
@@ -93,11 +91,11 @@ const create = async (req, res) => {
 
     return successResponse(res, supplier, 'Supplier berhasil dibuat', 201);
   } catch (err) {
-    return errorResponse(res, err.message, err.status || 500);
+    return next(err);
   }
 };
 
-const update = async (req, res) => {
+const update = async (req, res, next) => {
   try {
     const { id } = req.params;
     const existing = await prisma.supplier.findUnique({ where: { id } });
@@ -131,11 +129,11 @@ const update = async (req, res) => {
 
     return successResponse(res, supplier, 'Supplier berhasil diperbarui');
   } catch (err) {
-    return errorResponse(res, err.message, err.status || 500);
+    return next(err);
   }
 };
 
-const remove = async (req, res) => {
+const remove = async (req, res, next) => {
   try {
     const { id } = req.params;
     const existing = await prisma.supplier.findUnique({ where: { id } });
@@ -167,7 +165,7 @@ const remove = async (req, res) => {
 
     return successResponse(res, null, 'Supplier berhasil dinonaktifkan');
   } catch (err) {
-    return errorResponse(res, err.message, err.status || 500);
+    return next(err);
   }
 };
 
