@@ -1,10 +1,5 @@
-const { format } = require('date-fns');
 const prisma = require('../lib/prisma');
-
-const formatWIB = (date, fmt) => {
-  const wib = new Date(date.getTime() + 7 * 60 * 60 * 1000);
-  return format(wib, fmt);
-};
+const { formatWIB } = require('./wib');
 
 /**
  * Generate a unique barcode string.
