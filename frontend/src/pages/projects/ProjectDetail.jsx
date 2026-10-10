@@ -50,7 +50,7 @@ function UpdateUsageModal({ material, projectId, onClose }) {
   const currentQty = Number(material.usedQty) || 0;
   const minQty = isAdmin ? 0 : currentQty;
   const estimatedQty = Number(material.estimatedQty) || 0;
-  const unitLabel = material.unit?.name || '';
+  const unitLabel = material.unit?.name || material.product?.unit || '';
   const parsedQty = parseFloat(usedQty);
   const belowMin = !isNaN(parsedQty) && parsedQty < minQty;
   const overEstimate = !isNaN(parsedQty) && parsedQty > estimatedQty;

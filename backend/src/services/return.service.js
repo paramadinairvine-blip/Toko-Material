@@ -16,7 +16,7 @@ const returnIncludes = {
     },
   },
   transaction: {
-    select: { id: true, transactionNumber: true, type: true, total: true, customerName: true, projectId: true },
+    select: { id: true, transactionNumber: true, type: true, status: true, total: true, customerName: true, projectId: true },
   },
   creator: { select: { id: true, fullName: true } },
 };

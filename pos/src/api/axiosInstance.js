@@ -109,7 +109,9 @@ axiosInstance.interceptors.response.use(
     }
 
     if (error.response.status === 403) {
-      error.message = 'Akses ditolak. Anda tidak memiliki izin untuk tindakan ini.';
+      error.message = String(originalRequest?.url || '').includes('/auth/login')
+        ? error.response.data?.message || 'Akun tidak aktif, silakan hubungi administrator'
+        : 'Akses ditolak. Anda tidak memiliki izin untuk tindakan ini.';
     } else if (error.response.status === 404) {
       error.message = error.response.data?.message || 'Data tidak ditemukan.';
     } else if (error.response.status === 422) {

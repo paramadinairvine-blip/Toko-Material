@@ -207,7 +207,7 @@ export default function BrandList() {
           <span className="font-semibold text-gray-900">{deleteTarget?.name}</span>?
           {deleteTarget?._count?.products > 0 && (
             <span className="block mt-2 text-amber-600">
-              Brand ini memiliki {deleteTarget._count.products} produk terkait dan akan dinonaktifkan saja.
+              Brand ini masih dipakai {deleteTarget._count.products} produk. Brand hanya bisa dihapus setelah tidak ada produk aktif yang memakainya.
             </span>
           )}
         </p>

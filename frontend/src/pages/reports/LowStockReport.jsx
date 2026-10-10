@@ -34,6 +34,10 @@ function StatCard({ title, value, icon: Icon, color }) {
   );
 }
 
+// API mengirim kategori sebagai teks; data lama bisa berupa objek
+const getCategoryName = (item) =>
+  (typeof item.category === 'string' ? item.category : item.category?.name) || '-';
+
 export default function LowStockReport() {
   const printRef = useRef();
 
@@ -53,7 +57,7 @@ export default function LowStockReport() {
   const items = data?.items || [];
 
   const outOfStock = items.filter((i) => i.stock <= 0).length;
-  const lowStock = items.filter((i) => i.stock > 0 && i.stock < i.minStock).length;
+  const lowStock = items.filter((i) => i.stock > 0 && i.stock <= i.minStock).length;
 
   const getStatusBadge = (item) => {
     if (item.stock <= 0) return <Badge variant="danger" size="sm">Habis</Badge>;
@@ -70,7 +74,7 @@ export default function LowStockReport() {
       key: 'name', header: 'Produk', sortable: true,
       render: (_, row) => <p className="font-medium text-gray-900">{row.name}</p>,
     },
-    { key: 'category', header: 'Kategori', render: (_, row) => row.category?.name || '-' },
+    { key: 'category', header: 'Kategori', render: (_, row) => getCategoryName(row) },
     {
       key: 'stock', header: 'Stok', sortable: true,
       render: (_, row) => (
@@ -90,7 +94,7 @@ export default function LowStockReport() {
     const rows = items.map((r) => [
       r.name,
       r.sku,
-      r.category?.name || '-',
+      getCategoryName(r),
       r.stock,
       r.unitOfMeasure?.abbreviation || r.unit || '-',
       r.minStock,
@@ -177,7 +181,7 @@ export default function LowStockReport() {
                   <td style={{ border: '1px solid #d1d5db', padding: '3px 6px' }}>{i + 1}</td>
                   <td style={{ border: '1px solid #d1d5db', padding: '3px 6px' }}>{r.name}</td>
                   <td style={{ border: '1px solid #d1d5db', padding: '3px 6px' }}>{r.sku}</td>
-                  <td style={{ border: '1px solid #d1d5db', padding: '3px 6px' }}>{r.category?.name || '-'}</td>
+                  <td style={{ border: '1px solid #d1d5db', padding: '3px 6px' }}>{getCategoryName(r)}</td>
                   <td style={{ border: '1px solid #d1d5db', padding: '3px 6px', textAlign: 'right' }}>{r.stock}</td>
                   <td style={{ border: '1px solid #d1d5db', padding: '3px 6px' }}>{r.unitOfMeasure?.abbreviation || r.unit || '-'}</td>
                   <td style={{ border: '1px solid #d1d5db', padding: '3px 6px', textAlign: 'right' }}>{r.minStock}</td>

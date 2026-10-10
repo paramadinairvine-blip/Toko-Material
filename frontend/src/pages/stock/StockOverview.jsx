@@ -37,7 +37,7 @@ function MovementHistoryModal({ product, onClose }) {
       key: 'quantity', header: 'Jumlah',
       render: (v, row) => (
         <span className={row.type === 'IN' ? 'text-green-600 font-medium' : row.type === 'OUT' ? 'text-red-600 font-medium' : 'font-medium'}>
-          {row.type === 'IN' ? '+' : row.type === 'OUT' ? '-' : ''}{Math.abs(v)}
+          {row.type === 'IN' ? '+' : row.type === 'OUT' ? '-' : v > 0 ? '+' : v < 0 ? '-' : ''}{Math.abs(v)}
         </span>
       ),
     },

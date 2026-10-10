@@ -36,7 +36,7 @@ export default function ProductForm() {
 
   const { data: brands } = useQuery({
     queryKey: ['brands'],
-    queryFn: async () => { const { data } = await brandAPI.getAll(); return data.data; },
+    queryFn: async () => { const { data } = await brandAPI.getAll({ isActive: true }); return data.data; },
   });
 
   const { data: unitMeasures } = useQuery({

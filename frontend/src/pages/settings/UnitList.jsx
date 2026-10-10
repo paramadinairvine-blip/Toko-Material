@@ -227,7 +227,7 @@ export default function UnitList() {
           <span className="font-semibold text-gray-900">
             {deleteTarget?.name} ({deleteTarget?.abbreviation})
           </span>
-          ? Satuan yang sudah digunakan pada produk akan dinonaktifkan.
+          ? Satuan yang masih dipakai produk aktif tidak bisa dihapus.
         </p>
       </Modal>
     </div>
