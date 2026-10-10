@@ -10,7 +10,7 @@ const { resolveFactorFromDb, toBaseQty } = require('../utils/unitResolver');
 
 // Stok menipis = stok sudah di titik minimum atau di bawahnya (stock <= minStock).
 // Dipakai sama oleh daftar stok menipis dan notifikasi.
-const isLowStock = (p) => p.stock <= p.minStock;
+const isLowStock = (p) => p.minStock > 0 && p.stock <= p.minStock;
 
 /**
  * Get the current stock of a product (or a specific variant).

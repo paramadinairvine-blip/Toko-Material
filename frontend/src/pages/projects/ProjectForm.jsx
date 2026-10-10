@@ -241,7 +241,7 @@ export default function ProjectForm() {
         productId: m.productId,
         estimatedQty: parseFloat(m.estimatedQty) || 0,
         usedQty: isEdit ? (parseInt(m.usedQty, 10) || 0) : 0,
-        unitPrice: parseFloat(m.unitPrice) || 0,
+        unitPrice: m.unitPrice === '' || m.unitPrice == null ? undefined : (parseFloat(m.unitPrice) || 0),
         notes: m.notes?.trim() || null,
       }));
 
