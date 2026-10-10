@@ -1,5 +1,8 @@
 import { create } from 'zustand';
 import { authAPI } from '../api/endpoints';
+import { ROLES } from '../utils/constants';
+
+const POS_ROLES = [ROLES.ADMIN, ROLES.KASIR];
 
 const safeGetItem = (key) => {
   try {
@@ -21,6 +24,16 @@ const useAuthStore = create((set, get) => ({
     try {
       const { data: res } = await authAPI.login({ email, password });
       const { user, accessToken, refreshToken } = res.data;
+
+      // Only ADMIN and KASIR may use the POS: refuse other roles up front
+      if (!POS_ROLES.includes(user?.role)) {
+        if (refreshToken) {
+          await authAPI.logout(refreshToken, accessToken).catch(() => {});
+        }
+        const err = new Error('Akun ini tidak memiliki akses kasir. Gunakan akun Admin atau Kasir.');
+        err.code = 'NO_POS_ACCESS';
+        throw err;
+      }
 
       localStorage.setItem('accessToken', accessToken);
       localStorage.setItem('refreshToken', refreshToken);

@@ -6,10 +6,12 @@ import { userAPI } from '../../api/endpoints';
 import { getErrorMessage } from '../../utils/handleError';
 import { Table, Badge, Button, SearchBar, Pagination, Modal, Input } from '../../components/common';
 import { ROLE_LABELS, ROLE_COLORS } from '../../utils/constants';
+import useAuth from '../../hooks/useAuth';
 import UserForm from './UserForm';
 
 export default function UserList() {
   const queryClient = useQueryClient();
+  const { user: currentUser } = useAuth();
 
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
@@ -136,6 +138,8 @@ export default function UserList() {
           >
             <HiPencil className="w-4 h-4" />
           </button>
+          {/* No deactivate/delete on your own account */}
+          {row.id !== currentUser?.id && (
           <button
             onClick={(e) => { e.stopPropagation(); setToggleTarget(row); }}
             className={`p-1.5 rounded-lg transition-colors ${
@@ -148,6 +152,7 @@ export default function UserList() {
           >
             {row.isActive ? <HiBan className="w-4 h-4" /> : <HiCheck className="w-4 h-4" />}
           </button>
+          )}
           <button
             onClick={(e) => { e.stopPropagation(); setResetTarget(row); setNewPassword(''); }}
             className="p-1.5 text-gray-500 hover:text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"
@@ -156,6 +161,7 @@ export default function UserList() {
           >
             <HiLockClosed className="w-4 h-4" />
           </button>
+          {row.id !== currentUser?.id && (
           <button
             onClick={(e) => { e.stopPropagation(); setDeleteTarget(row); }}
             className="p-1.5 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
@@ -164,6 +170,7 @@ export default function UserList() {
           >
             <HiTrash className="w-4 h-4" />
           </button>
+          )}
         </div>
       ),
     },

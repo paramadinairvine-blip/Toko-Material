@@ -1,9 +1,9 @@
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { HiArrowLeft, HiBan, HiPrinter, HiRefresh } from 'react-icons/hi';
 import toast from 'react-hot-toast';
 import { useState } from 'react';
-import { transactionAPI } from '../../api/endpoints';
+import { transactionAPI, returnAPI } from '../../api/endpoints';
 import { getErrorMessage } from '../../utils/handleError';
 import { Card, Badge, Button, Loading, Table, Modal } from '../../components/common';
 import { formatRupiah } from '../../utils/formatCurrency';
@@ -38,6 +38,15 @@ export default function TransactionDetail() {
     },
   });
 
+  // Returns already recorded for this transaction
+  const { data: returns } = useQuery({
+    queryKey: ['returns-by-transaction', id],
+    queryFn: async () => {
+      const { data } = await returnAPI.getByTransaction(id);
+      return data.data;
+    },
+  });
+
   const cancelMutation = useMutation({
     mutationFn: () => transactionAPI.cancel(id),
     onSuccess: () => {
@@ -50,6 +59,19 @@ export default function TransactionDetail() {
 
   if (isLoading) return <Loading text="Memuat detail transaksi..." />;
   if (!trx) return <p className="text-center text-gray-500 py-12">Transaksi tidak ditemukan</p>;
+
+  // Item discount, header discount, tax and payment so the items add up to the total
+  const itemsSubtotal = (trx.items || []).reduce(
+    (sum, item) => sum + Number(item.subtotal ?? (item.quantity * Number(item.price) - (Number(item.discount) || 0))),
+    0
+  );
+  const headerDiscount = Number(trx.discount) || 0;
+  const tax = Number(trx.tax) || 0;
+  const paidAmount = Number(trx.paidAmount) || 0;
+  const changeAmount = Number(trx.changeAmount) || 0;
+  const hasItemDiscount = (trx.items || []).some((item) => Number(item.discount) > 0);
+  const returnList = returns || [];
+  const totalRefund = returnList.reduce((sum, r) => sum + (Number(r.refundAmount) || 0), 0);
 
   const itemColumns = [
     {
@@ -81,12 +103,19 @@ export default function TransactionDetail() {
       header: 'Harga Satuan',
       render: (v) => formatRupiah(v),
     },
+    ...(hasItemDiscount ? [{
+      key: 'discount',
+      header: 'Diskon',
+      render: (v) => (Number(v) > 0
+        ? <span className="text-red-600">-{formatRupiah(v)}</span>
+        : <span className="text-gray-400">-</span>),
+    }] : []),
     {
       key: 'subtotal',
       header: 'Total',
       render: (v, row) => (
         <span className="font-medium text-gray-900">
-          {formatRupiah(v || (row.quantity * row.price))}
+          {formatRupiah(v ?? (row.quantity * row.price - (Number(row.discount) || 0)))}
         </span>
       ),
     },
@@ -159,6 +188,24 @@ export default function TransactionDetail() {
               <span className="text-sm text-gray-500">Total</span>
               <span className="text-sm font-bold text-blue-600">{formatRupiah(trx.total)}</span>
             </div>
+            {trx.type === 'CASH' && paidAmount > 0 && (
+              <>
+                <div className="flex justify-between">
+                  <span className="text-sm text-gray-500">Dibayar</span>
+                  <span className="text-sm">{formatRupiah(paidAmount)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-sm text-gray-500">Kembalian</span>
+                  <span className="text-sm">{formatRupiah(changeAmount)}</span>
+                </div>
+              </>
+            )}
+            {trx.project?.name && (
+              <div className="flex justify-between">
+                <span className="text-sm text-gray-500">Proyek</span>
+                <span className="text-sm">{trx.project.name}</span>
+              </div>
+            )}
             {trx.notes && (
               <div className="pt-3 border-t border-gray-100">
                 <p className="text-xs text-gray-500 mb-1">Catatan</p>
@@ -168,12 +215,28 @@ export default function TransactionDetail() {
           </div>
         </Card>
 
-        <Card title="Kasir" padding="md">
+        <Card title="Kasir & Pelanggan" padding="md">
           <div className="space-y-3">
             <div className="flex justify-between">
               <span className="text-sm text-gray-500">Kasir</span>
               <span className="text-sm font-medium">{trx.creator?.fullName || '-'}</span>
             </div>
+            <div className="flex justify-between">
+              <span className="text-sm text-gray-500">{trx.type === 'BON' ? 'Nama Pengambil' : 'Pelanggan'}</span>
+              <span className="text-sm font-medium">{trx.customerName || '-'}</span>
+            </div>
+            {trx.customerPhone && (
+              <div className="flex justify-between">
+                <span className="text-sm text-gray-500">No. Telepon</span>
+                <span className="text-sm">{trx.customerPhone}</span>
+              </div>
+            )}
+            {(trx.kepanitiaan || trx.unitLembaga?.name) && (
+              <div className="flex justify-between">
+                <span className="text-sm text-gray-500">Kepanitiaan/Kegiatan</span>
+                <span className="text-sm">{trx.kepanitiaan || trx.unitLembaga?.name}</span>
+              </div>
+            )}
           </div>
         </Card>
       </div>
@@ -187,13 +250,82 @@ export default function TransactionDetail() {
         />
         {trx.items?.length > 0 && (
           <div className="px-6 py-4 bg-gray-50 border-t border-gray-200 flex justify-end">
-            <div className="text-right">
-              <p className="text-sm text-gray-500">Total Keseluruhan</p>
-              <p className="text-xl font-bold text-blue-600">{formatRupiah(trx.total)}</p>
+            <div className="w-full sm:w-72 space-y-1.5">
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-500">Subtotal</span>
+                <span className="text-gray-900">{formatRupiah(itemsSubtotal)}</span>
+              </div>
+              {headerDiscount > 0 && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-500">Diskon</span>
+                  <span className="text-red-600">-{formatRupiah(headerDiscount)}</span>
+                </div>
+              )}
+              {tax > 0 && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-500">Pajak</span>
+                  <span className="text-gray-900">{formatRupiah(tax)}</span>
+                </div>
+              )}
+              <div className="flex justify-between items-baseline pt-1.5 border-t border-gray-200">
+                <span className="text-sm text-gray-500">Total Keseluruhan</span>
+                <span className="text-xl font-bold text-blue-600">{formatRupiah(trx.total)}</span>
+              </div>
+              {trx.type === 'CASH' && paidAmount > 0 && (
+                <>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-500">Dibayar</span>
+                    <span className="text-gray-900">{formatRupiah(paidAmount)}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-500">Kembalian</span>
+                    <span className="text-gray-900">{formatRupiah(changeAmount)}</span>
+                  </div>
+                </>
+              )}
+              {totalRefund > 0 && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-500">Total Refund Retur</span>
+                  <span className="text-red-600">-{formatRupiah(totalRefund)}</span>
+                </div>
+              )}
             </div>
           </div>
         )}
       </Card>
+
+      {/* Returns */}
+      {returnList.length > 0 && (
+        <Card title={`Retur (${returnList.length})`} padding="none">
+          <div className="divide-y divide-gray-100">
+            {returnList.map((ret) => (
+              <div key={ret.id} className="px-6 py-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <Link to={`/retur/${ret.id}`} className="text-sm font-mono font-medium text-blue-600 hover:underline">
+                      {ret.returnNumber}
+                    </Link>
+                    <p className="text-xs text-gray-500">
+                      {formatTanggalWaktu(ret.createdAt)}
+                      {ret.creator?.fullName ? ` • ${ret.creator.fullName}` : ''}
+                    </p>
+                  </div>
+                  <span className="text-sm font-semibold text-red-600">-{formatRupiah(ret.refundAmount)}</span>
+                </div>
+                <ul className="mt-2 text-sm text-gray-700 space-y-0.5">
+                  {(ret.items || []).map((ri) => (
+                    <li key={ri.id} className="flex justify-between">
+                      <span>{ri.product?.name || '-'} × {ri.quantity}</span>
+                      <span className="text-gray-500">{formatRupiah(ri.subtotal)}</span>
+                    </li>
+                  ))}
+                </ul>
+                {ret.reason && <p className="mt-1 text-xs text-gray-500">Alasan: {ret.reason}</p>}
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
 
       {/* Cancel Modal */}
       <Modal

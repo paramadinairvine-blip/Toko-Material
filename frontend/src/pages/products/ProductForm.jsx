@@ -17,7 +17,7 @@ export default function ProductForm() {
   // ─── Form state ──────────────────────────────────────
   const [form, setForm] = useState({
     name: '', categoryId: '', brandId: '', supplierId: '', description: '',
-    unit: 'pcs', buyPrice: '', sellPrice: '', stock: '0',
+    unit: '', buyPrice: '', sellPrice: '', stock: '0',
     minStock: '0', maxStock: '', image: '', barcode: '',
   });
   const [barcodeMode, setBarcodeMode] = useState('auto');
@@ -60,7 +60,7 @@ export default function ProductForm() {
         brandId: existing.brandId || '',
         supplierId: existing.supplierId || '',
         description: existing.description || '',
-        unit: existing.unit || 'pcs',
+        unit: existing.unit || '',
         buyPrice: existing.buyPrice?.toString() || '',
         sellPrice: existing.sellPrice?.toString() || '',
         stock: existing.stock?.toString() || '0',
@@ -76,9 +76,6 @@ export default function ProductForm() {
           unitId: pu.unit?.id || pu.unitId,
           unitName: pu.unit?.name || '',
           qty: pu.conversionFactor?.toString() || '1',
-          buyPrice: pu.buyPrice?.toString() || '',
-          sellPrice: pu.sellPrice?.toString() || '',
-          isDefault: pu.isBaseUnit || false,
         })));
       }
     }
@@ -107,6 +104,22 @@ export default function ProductForm() {
 
   const commonUnits = ['pcs', 'kg', 'sak', 'box', 'batang', 'meter', 'liter', 'lembar', 'roll', 'set'];
 
+  // ─── Base unit (Satuan Terkecil) ─────────────────────
+  // Options are the master unit names (lowercase). The saved value may be a unit
+  // abbreviation ("btg") or a name missing from master data, so it is matched by
+  // name/abbreviation and added to the options when nothing matches: the select
+  // always shows the real value instead of silently falling back to the first option.
+  const unitNames = [...new Set(
+    unitMeasures?.length > 0 ? unitMeasures.map((u) => u.name.toLowerCase()) : commonUnits
+  )];
+  const baseUnit = form.unit || (unitNames.includes('pcs') ? 'pcs' : unitNames[0]) || 'pcs';
+  const baseUnitKey = baseUnit.trim().toLowerCase();
+  const matchedUnit = unitMeasures?.find(
+    (u) => u.name.toLowerCase() === baseUnitKey || u.abbreviation?.toLowerCase() === baseUnitKey
+  );
+  const baseUnitValue = matchedUnit ? matchedUnit.name.toLowerCase() : baseUnitKey;
+  const unitOptions = unitNames.includes(baseUnitValue) ? unitNames : [baseUnitValue, ...unitNames];
+
   // ─── Handlers ────────────────────────────────────────
   const updateForm = (field, value) => {
     setForm((prev) => ({ ...prev, [field]: value }));
@@ -115,12 +128,12 @@ export default function ProductForm() {
   };
 
   const addSellUnit = () => {
-    setSellUnits((prev) => [...prev, { unitId: '', unitName: '', qty: '1', buyPrice: '', sellPrice: '', isDefault: prev.length === 0 }]);
+    setSellUnits((prev) => [...prev, { unitId: '', unitName: '', qty: '1' }]);
   };
 
   const updateSellUnit = (idx, field, value) => {
     setSellUnits((prev) => prev.map((u, i) => {
-      if (i !== idx) return field === 'isDefault' && value ? { ...u, isDefault: false } : u;
+      if (i !== idx) return u;
       if (field === 'unitId') {
         // Common units not yet in master data are sent by name (backend creates them)
         if (value.startsWith('name:')) {
@@ -135,13 +148,7 @@ export default function ProductForm() {
   };
 
   const removeSellUnit = (idx) => {
-    setSellUnits((prev) => {
-      const next = prev.filter((_, i) => i !== idx);
-      if (prev[idx]?.isDefault && next.length > 0) {
-        next[0].isDefault = true;
-      }
-      return next;
-    });
+    setSellUnits((prev) => prev.filter((_, i) => i !== idx));
     setIsDirty(true);
   };
 
@@ -162,9 +169,12 @@ export default function ProductForm() {
     updateForm(field, raw);
   };
 
-  const handleUnitPriceChange = (idx, field, value) => {
-    const raw = parseThousands(value);
-    updateSellUnit(idx, field, raw);
+  // Package price is not stored: it is always base price × isi (same as the POS)
+  const calcPackagePrice = (basePrice, qty) => {
+    const price = parseFloat(basePrice);
+    const factor = parseFloat(qty);
+    if (!price || !factor) return '';
+    return String(Math.round(price * factor));
   };
 
   const calcMargin = (buy, sell) => {
@@ -244,7 +254,7 @@ export default function ProductForm() {
       brandId: form.brandId || undefined,
       supplierId: form.supplierId || undefined,
       description: form.description || undefined,
-      unit: form.unit,
+      unit: baseUnit,
       buyPrice: parseFloat(form.buyPrice) || 0,
       sellPrice: parseFloat(form.sellPrice) || 0,
       minStock: parseInt(form.minStock) || 0,
@@ -270,7 +280,8 @@ export default function ProductForm() {
           unitId: u.unitId || undefined,
           unitName: u.unitName || undefined,
           conversionFactor: parseFloat(u.qty) || 1,
-          isBaseUnit: u.isDefault,
+          // A package is never the base unit (the base unit is "Satuan Terkecil")
+          isBaseUnit: false,
         }));
     }
 
@@ -365,8 +376,8 @@ export default function ProductForm() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1.5">Satuan Terkecil</label>
-                <select value={form.unit} onChange={(e) => updateForm('unit', e.target.value)} className="w-full rounded-lg border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm">
-                  {(unitMeasures?.length > 0 ? unitMeasures.map((u) => u.name.toLowerCase()) : commonUnits).map((u) => (
+                <select value={baseUnitValue} onChange={(e) => updateForm('unit', e.target.value)} className="w-full rounded-lg border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm">
+                  {unitOptions.map((u) => (
                     <option key={u} value={u}>{u.charAt(0).toUpperCase() + u.slice(1)}</option>
                   ))}
                 </select>
@@ -378,7 +389,7 @@ export default function ProductForm() {
               <div className="flex items-center justify-between mb-3">
                 <div>
                   <h4 className="text-sm font-semibold text-gray-700">Satuan Jual</h4>
-                  <p className="text-xs text-gray-400 mt-0.5">Tentukan harga untuk setiap paket satuan jual</p>
+                  <p className="text-xs text-gray-400 mt-0.5">Harga paket dihitung otomatis: harga satuan terkecil × isi</p>
                 </div>
                 <Button variant="outline" size="sm" icon={HiPlus} onClick={addSellUnit} type="button">
                   Tambah Paket Jual
@@ -399,8 +410,8 @@ export default function ProductForm() {
                     </thead>
                     <tbody>
                       <tr className="border-b border-gray-100">
-                        <td className="px-3 py-2"><span className="text-gray-700 font-medium capitalize">{form.unit}</span></td>
-                        <td className="px-3 py-2"><span className="text-gray-500">1 {form.unit}</span></td>
+                        <td className="px-3 py-2"><span className="text-gray-700 font-medium capitalize">{baseUnit}</span></td>
+                        <td className="px-3 py-2"><span className="text-gray-500">1 {baseUnit}</span></td>
                         <td className="px-3 py-2">
                           <div className="flex items-center gap-1">
                             <span className="text-gray-400 text-xs">Rp.</span>
@@ -433,19 +444,17 @@ export default function ProductForm() {
                         <th className="px-3 py-2.5 text-left font-semibold text-gray-600">Harga Beli</th>
                         <th className="px-3 py-2.5 text-left font-semibold text-gray-600">Harga Jual</th>
                         <th className="px-3 py-2.5 text-left font-semibold text-gray-600">% Margin</th>
-                        <th className="px-3 py-2.5 text-center font-semibold text-gray-600">Default</th>
                         <th className="px-2 py-2.5 w-10"></th>
                       </tr>
                     </thead>
                     <tbody>
                       <tr className="border-b border-gray-100 bg-blue-50/30">
                         <td className="px-2 py-2 text-center"><span className="text-gray-400 text-xs">1</span></td>
-                        <td className="px-3 py-2"><span className="text-gray-700 font-medium capitalize">{form.unit}</span><span className="text-xs text-blue-500 ml-1">(dasar)</span></td>
-                        <td className="px-3 py-2"><span className="text-gray-500">1 {form.unit}</span></td>
+                        <td className="px-3 py-2"><span className="text-gray-700 font-medium capitalize">{baseUnit}</span><span className="text-xs text-blue-500 ml-1">(dasar)</span></td>
+                        <td className="px-3 py-2"><span className="text-gray-500">1 {baseUnit}</span></td>
                         <td className="px-3 py-2"><div className="flex items-center gap-1"><span className="text-gray-400 text-xs">Rp.</span><input type="text" inputMode="numeric" value={formatThousands(form.buyPrice)} onChange={(e) => handlePriceChange('buyPrice', e.target.value)} placeholder="0" className={`w-24 rounded text-sm py-1.5 px-2 focus:border-blue-500 focus:ring-blue-500 ${errors.buyPrice ? 'border-red-400' : 'border-gray-300'}`} /></div>{errors.buyPrice && <p className="text-xs text-red-500 mt-1">{errors.buyPrice}</p>}</td>
                         <td className="px-3 py-2"><div className="flex items-center gap-1"><span className="text-gray-400 text-xs">Rp.</span><input type="text" inputMode="numeric" value={formatThousands(form.sellPrice)} onChange={(e) => handlePriceChange('sellPrice', e.target.value)} placeholder="0" className={`w-24 rounded text-sm py-1.5 px-2 focus:border-blue-500 focus:ring-blue-500 ${errors.sellPrice ? 'border-red-400' : 'border-gray-300'}`} /></div>{errors.sellPrice && <p className="text-xs text-red-500 mt-1">{errors.sellPrice}</p>}</td>
                         <td className="px-3 py-2"><span className="text-sm text-gray-500 font-mono">{calcMargin(form.buyPrice, form.sellPrice) ? `${calcMargin(form.buyPrice, form.sellPrice)}%` : '-'}</span></td>
-                        <td className="px-3 py-2 text-center"><input type="radio" name="defaultUnit" checked={!sellUnits.some(u => u.isDefault)} onChange={() => setSellUnits(prev => prev.map(u => ({ ...u, isDefault: false })))} className="text-blue-600 focus:ring-blue-500" /></td>
                         <td className="px-2 py-2"></td>
                       </tr>
                       {sellUnits.map((su, idx) => (
@@ -458,11 +467,10 @@ export default function ProductForm() {
                               {commonUnits.filter(cu => !unitMeasures?.some(m => m.name.toLowerCase() === cu)).map((u) => (<option key={u} value={`name:${u}`}>{u.charAt(0).toUpperCase() + u.slice(1)}</option>))}
                             </select>
                           </td>
-                          <td className="px-3 py-2"><div className="flex items-center gap-1"><input type="number" value={su.qty} onChange={(e) => updateSellUnit(idx, 'qty', e.target.value)} placeholder="1" min="1" className="w-16 rounded border-gray-300 text-sm py-1.5 px-2 focus:border-blue-500 focus:ring-blue-500" /><span className="text-gray-500 text-xs capitalize">{form.unit}</span></div></td>
-                          <td className="px-3 py-2"><div className="flex items-center gap-1"><span className="text-gray-400 text-xs">Rp.</span><input type="text" inputMode="numeric" value={formatThousands(su.buyPrice)} onChange={(e) => handleUnitPriceChange(idx, 'buyPrice', e.target.value)} placeholder="0" className="w-24 rounded border-gray-300 text-sm py-1.5 px-2 focus:border-blue-500 focus:ring-blue-500" /></div></td>
-                          <td className="px-3 py-2"><div className="flex items-center gap-1"><span className="text-gray-400 text-xs">Rp.</span><input type="text" inputMode="numeric" value={formatThousands(su.sellPrice)} onChange={(e) => handleUnitPriceChange(idx, 'sellPrice', e.target.value)} placeholder="0" className="w-24 rounded border-gray-300 text-sm py-1.5 px-2 focus:border-blue-500 focus:ring-blue-500" /></div></td>
-                          <td className="px-3 py-2"><span className="text-sm text-gray-500 font-mono">{calcMargin(su.buyPrice, su.sellPrice) ? `${calcMargin(su.buyPrice, su.sellPrice)}%` : '-'}</span></td>
-                          <td className="px-3 py-2 text-center"><input type="radio" name="defaultUnit" checked={su.isDefault} onChange={() => setSellUnits(prev => prev.map((u, i) => ({ ...u, isDefault: i === idx })))} className="text-blue-600 focus:ring-blue-500" /></td>
+                          <td className="px-3 py-2"><div className="flex items-center gap-1"><input type="number" value={su.qty} onChange={(e) => updateSellUnit(idx, 'qty', e.target.value)} placeholder="1" min="1" className="w-16 rounded border-gray-300 text-sm py-1.5 px-2 focus:border-blue-500 focus:ring-blue-500" /><span className="text-gray-500 text-xs capitalize">{baseUnit}</span></div></td>
+                          <td className="px-3 py-2"><span className="text-sm text-gray-700">{calcPackagePrice(form.buyPrice, su.qty) ? `Rp. ${formatThousands(calcPackagePrice(form.buyPrice, su.qty))}` : '-'}</span></td>
+                          <td className="px-3 py-2"><span className="text-sm text-gray-700">{calcPackagePrice(form.sellPrice, su.qty) ? `Rp. ${formatThousands(calcPackagePrice(form.sellPrice, su.qty))}` : '-'}</span></td>
+                          <td className="px-3 py-2"><span className="text-sm text-gray-500 font-mono">{calcMargin(form.buyPrice, form.sellPrice) ? `${calcMargin(form.buyPrice, form.sellPrice)}%` : '-'}</span></td>
                           <td className="px-2 py-2 text-center"><button type="button" onClick={() => removeSellUnit(idx)} className="p-1 text-red-500 hover:bg-red-50 rounded transition-colors"><HiTrash className="w-4 h-4" /></button></td>
                         </tr>
                       ))}

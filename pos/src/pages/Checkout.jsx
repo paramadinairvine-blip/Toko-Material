@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
@@ -23,6 +23,9 @@ export default function Checkout() {
   const queryClient = useQueryClient();
   const [receiptData, setReceiptData] = useState(null);
   const [cetakStruk, setCetakStruk] = useState(true);
+  // Synchronous submit guard: createMutation.isPending only updates after a re-render,
+  // so two clicks a few ms apart would both pass it and create two transactions.
+  const submittingRef = useRef(false);
 
   const {
     items, discount, notes, customerName, customerPhone, unitLembagaId, paymentType, paidAmount,
@@ -42,7 +45,7 @@ export default function Checkout() {
   // Keyboard shortcut: CTRL+Enter to submit
   useEffect(() => {
     const handleKeyDown = (e) => {
-      if (e.ctrlKey && e.key === 'Enter' && !createMutation.isPending) {
+      if (e.ctrlKey && e.key === 'Enter' && !submittingRef.current && !createMutation.isPending) {
         e.preventDefault();
         handleSubmit();
       }
@@ -79,12 +82,20 @@ export default function Checkout() {
       const resData = error.response?.data;
       if (resData?.code === 'PRICE_CHANGED') {
         const changes = resData.priceChanges || [];
-        // Update cart prices to the current server prices. priceChanges has no unitId,
-        // so match by productId + the price that was sent (oldPrice).
+        // Update cart prices to the current server prices: match the cart line by
+        // productId + unitId (null/undefined unitId = base unit line).
         const { items: cartItems, updateUnitPrice } = useCartStore.getState();
         changes.forEach((p) => {
+          const hasUnit = Object.prototype.hasOwnProperty.call(p, 'unitId');
           cartItems
-            .filter((i) => i.productId === p.productId && Math.abs(Number(i.unitPrice) - Number(p.oldPrice)) < 1)
+            .filter((i) => {
+              if (i.productId !== p.productId) return false;
+              // Older backend without unitId: fall back to the price that was sent
+              if (!hasUnit) return Math.abs(Number(i.unitPrice) - Number(p.oldPrice)) < 1;
+              if ((i.unitId || null) === (p.unitId || null)) return true;
+              // Base unit may be reported as null while the cart holds the product's base unitId
+              return !p.unitId && (i.conversionFactor || 1) === 1;
+            })
             .forEach((i) => updateUnitPrice(i.cartKey, Number(p.newPrice)));
         });
         const detail = changes.map(
@@ -99,11 +110,16 @@ export default function Checkout() {
         toast.error(resData?.message || 'Gagal membuat transaksi');
       }
     },
+    onSettled: (_data, error) => {
+      // Failed: allow a retry. Succeeded: stay locked until the receipt is closed
+      // or the page navigates away (the cart still holds the paid items until then).
+      if (error) submittingRef.current = false;
+    },
   });
 
   const handleSubmit = () => {
     // Already paid (receipt showing) or still submitting: never create the transaction twice
-    if (receiptData || createMutation.isPending) return;
+    if (receiptData || submittingRef.current || createMutation.isPending) return;
 
     if (items.length === 0) {
       toast.error('Keranjang kosong');
@@ -141,10 +157,12 @@ export default function Checkout() {
       kepanitiaan: unitLembagaId || undefined,
     };
 
+    submittingRef.current = true;
     createMutation.mutate(payload);
   };
 
   const handleReceiptClose = () => {
+    submittingRef.current = false;
     setReceiptData(null);
     clearCart();
     navigate('/kasir');
