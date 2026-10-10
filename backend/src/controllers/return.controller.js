@@ -1,6 +1,6 @@
 const returnService = require('../services/return.service');
 const { successResponse, paginatedResponse } = require('../utils/responseHelper');
-const { parsePagination, parseStringParam } = require('../utils/queryParams');
+const { parsePagination, parseStringParam } = require('../utils/listQuery');
 
 const getAll = async (req, res, next) => {
   try {

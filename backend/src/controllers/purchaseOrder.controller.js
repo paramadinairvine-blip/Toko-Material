@@ -1,7 +1,7 @@
 const poService = require('../services/purchaseOrder.service');
 const { successResponse, paginatedResponse } = require('../utils/responseHelper');
 const { PO_STATUS } = require('../utils/constants');
-const { parsePagination, parseEnumParam, parseStringParam } = require('../utils/queryParams');
+const { parsePagination, parseEnumParam, parseStringParam } = require('../utils/listQuery');
 const logger = require('../utils/logger');
 
 // Semua error diteruskan ke errorHandler pusat (next) agar AppError dan

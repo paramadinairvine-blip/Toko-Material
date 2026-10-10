@@ -109,8 +109,41 @@ const validateProduct = [
     .optional()
     .isInt({ min: 0 }).withMessage('Stok minimum harus berupa angka positif'),
   body('maxStock')
-    .optional()
+    .optional({ values: 'null' })
     .isInt({ min: 0 }).withMessage('Stok maksimum harus berupa angka positif'),
+  body('units')
+    .optional({ values: 'null' })
+    .isArray().withMessage('Satuan konversi harus berupa array'),
+  body('units.*.conversionFactor')
+    .custom((value) => {
+      const num = Number(value);
+      if (value === undefined || value === null || value === '' || !Number.isFinite(num) || num <= 0) {
+        throw new Error('Faktor konversi satuan harus berupa angka lebih dari 0');
+      }
+      return true;
+    }),
+  body('variants')
+    .optional({ values: 'null' })
+    .isArray().withMessage('Varian harus berupa array'),
+  body('variants.*.name')
+    .isString().withMessage('Nama varian tidak valid')
+    .bail()
+    .trim()
+    .notEmpty().withMessage('Nama varian wajib diisi'),
+  body('variants.*.sku')
+    .isString().withMessage('SKU varian tidak valid')
+    .bail()
+    .trim()
+    .notEmpty().withMessage('SKU varian wajib diisi'),
+  body('variants.*.buyPrice')
+    .optional({ values: 'null' })
+    .isFloat({ min: 0 }).withMessage('Harga beli varian harus berupa angka positif'),
+  body('variants.*.sellPrice')
+    .optional({ values: 'null' })
+    .isFloat({ min: 0 }).withMessage('Harga jual varian harus berupa angka positif'),
+  body('variants.*.stock')
+    .optional({ values: 'null' })
+    .isInt({ min: 0 }).withMessage('Stok varian harus berupa angka positif'),
   handleValidationErrors,
 ];
 
@@ -281,18 +314,101 @@ const validatePurchaseOrder = [
 
 // ==================== Supplier ====================
 
+// Nomor telepon: boleh diawali +, berisi angka/spasi/strip/kurung/titik, 5–15 digit
+const isPhoneNumber = (value) => {
+  const text = String(value).trim();
+  const digits = text.replace(/\D/g, '');
+  return /^\+?[\d\s\-().]+$/.test(text) && digits.length >= 5 && digits.length <= 15;
+};
+
+const supplierOptionalRules = [
+  body('contactName')
+    .optional({ values: 'null' })
+    .isString().withMessage('Nama kontak tidak valid'),
+  body('email')
+    .optional({ values: 'falsy' })
+    .isEmail().withMessage('Format email tidak valid'),
+  body('address')
+    .optional({ values: 'null' })
+    .isString().withMessage('Alamat tidak valid'),
+];
+
 const validateSupplier = [
   body('name')
+    .isString().withMessage('Nama supplier wajib diisi')
+    .bail()
+    .trim()
     .notEmpty().withMessage('Nama supplier wajib diisi'),
   body('phone')
-    .notEmpty().withMessage('Nomor telepon wajib diisi'),
+    .isString().withMessage('Nomor telepon wajib diisi')
+    .bail()
+    .trim()
+    .notEmpty().withMessage('Nomor telepon wajib diisi')
+    .bail()
+    .custom(isPhoneNumber).withMessage('Nomor telepon tidak valid'),
+  ...supplierOptionalRules,
+  handleValidationErrors,
+];
+
+const validateSupplierUpdate = [
+  body('name')
+    .optional()
+    .isString().withMessage('Nama supplier tidak valid')
+    .bail()
+    .trim()
+    .notEmpty().withMessage('Nama supplier tidak boleh kosong'),
+  body('phone')
+    .optional({ values: 'falsy' })
+    .isString().withMessage('Nomor telepon tidak valid')
+    .bail()
+    .trim()
+    .custom(isPhoneNumber).withMessage('Nomor telepon tidak valid'),
+  ...supplierOptionalRules,
   handleValidationErrors,
 ];
 
 // ==================== Project ====================
 
+const projectDateRules = [
+  body('startDate')
+    .optional({ values: 'falsy' })
+    .isISO8601().withMessage('Tanggal mulai tidak valid'),
+  body('endDate')
+    .optional({ values: 'falsy' })
+    .isISO8601().withMessage('Tanggal selesai tidak valid')
+    .bail()
+    .custom((value, { req }) => {
+      if (req.body.startDate && new Date(value) < new Date(req.body.startDate)) {
+        throw new Error('Tanggal selesai tidak boleh sebelum tanggal mulai');
+      }
+      return true;
+    }),
+];
+
+const projectMaterialListRules = [
+  body('materials')
+    .optional({ values: 'null' })
+    .isArray().withMessage('Material harus berupa array'),
+  body('materials.*.productId')
+    .isString().withMessage('Product ID tidak valid')
+    .bail()
+    .notEmpty().withMessage('Product ID wajib diisi pada setiap material'),
+  body('materials.*.estimatedQty')
+    .optional({ values: 'null' })
+    .isInt({ min: 0 }).withMessage('Estimasi jumlah harus bilangan bulat ≥ 0'),
+  body('materials.*.usedQty')
+    .optional({ values: 'null' })
+    .isInt({ min: 0 }).withMessage('Jumlah terpakai harus bilangan bulat ≥ 0'),
+  body('materials.*.unitPrice')
+    .optional({ values: 'null' })
+    .isFloat({ min: 0 }).withMessage('Harga satuan harus berupa angka positif'),
+];
+
 const validateProject = [
   body('name')
+    .isString().withMessage('Nama proyek wajib diisi')
+    .bail()
+    .trim()
     .notEmpty().withMessage('Nama proyek wajib diisi'),
   body('status')
     .optional()
@@ -301,6 +417,33 @@ const validateProject = [
   body('budget')
     .optional()
     .isFloat({ min: 0 }).withMessage('Anggaran harus berupa angka positif'),
+  ...projectDateRules,
+  ...projectMaterialListRules,
+  handleValidationErrors,
+];
+
+// POST /projects/:id/materials
+const validateProjectMaterial = [
+  body('productId')
+    .isString().withMessage('Product ID wajib diisi')
+    .bail()
+    .trim()
+    .notEmpty().withMessage('Product ID wajib diisi'),
+  body('estimatedQty')
+    .optional({ values: 'null' })
+    .isInt({ min: 0 }).withMessage('Estimasi jumlah harus bilangan bulat ≥ 0'),
+  body('unitPrice')
+    .optional({ values: 'null' })
+    .isFloat({ min: 0 }).withMessage('Harga satuan harus berupa angka positif'),
+  handleValidationErrors,
+];
+
+// PUT /projects/:id/materials/:materialId
+const validateProjectMaterialUsage = [
+  body('usedQty')
+    .exists({ values: 'null' }).withMessage('Jumlah penggunaan (usedQty) wajib diisi')
+    .bail()
+    .isInt({ min: 0 }).withMessage('Jumlah penggunaan harus bilangan bulat ≥ 0'),
   handleValidationErrors,
 ];
 
@@ -318,35 +461,8 @@ const validateProjectUpdate = [
   body('budget')
     .optional()
     .isFloat({ min: 0 }).withMessage('Anggaran harus berupa angka positif'),
-  body('startDate')
-    .optional({ values: 'falsy' })
-    .isISO8601().withMessage('Tanggal mulai tidak valid'),
-  body('endDate')
-    .optional({ values: 'falsy' })
-    .isISO8601().withMessage('Tanggal selesai tidak valid')
-    .bail()
-    .custom((value, { req }) => {
-      if (req.body.startDate && new Date(value) < new Date(req.body.startDate)) {
-        throw new Error('Tanggal selesai tidak boleh sebelum tanggal mulai');
-      }
-      return true;
-    }),
-  body('materials')
-    .optional()
-    .isArray().withMessage('Material harus berupa array'),
-  body('materials.*.productId')
-    .isString().withMessage('Product ID tidak valid')
-    .bail()
-    .notEmpty().withMessage('Product ID wajib diisi pada setiap material'),
-  body('materials.*.estimatedQty')
-    .optional({ values: 'null' })
-    .isInt({ min: 0 }).withMessage('Estimasi jumlah harus bilangan bulat ≥ 0'),
-  body('materials.*.usedQty')
-    .optional({ values: 'null' })
-    .isInt({ min: 0 }).withMessage('Jumlah terpakai harus bilangan bulat ≥ 0'),
-  body('materials.*.unitPrice')
-    .optional({ values: 'null' })
-    .isFloat({ min: 0 }).withMessage('Harga satuan harus berupa angka positif'),
+  ...projectDateRules,
+  ...projectMaterialListRules,
   handleValidationErrors,
 ];
 
@@ -393,8 +509,11 @@ module.exports = {
   validatePurchaseOrder,
   validatePurchaseOrderUpdate,
   validateSupplier,
+  validateSupplierUpdate,
   validateProject,
   validateProjectUpdate,
+  validateProjectMaterial,
+  validateProjectMaterialUsage,
   validateStockOpname,
   validateReturn,
 };

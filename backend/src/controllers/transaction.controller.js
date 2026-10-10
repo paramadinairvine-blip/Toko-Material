@@ -1,7 +1,7 @@
 const transactionService = require('../services/transaction.service');
 const { successResponse, paginatedResponse } = require('../utils/responseHelper');
 const { TRANSACTION_TYPES, TRANSACTION_STATUS } = require('../utils/constants');
-const { parsePagination, parseEnumParam, parseStringParam } = require('../utils/queryParams');
+const { parsePagination, parseEnumParam, parseStringParam } = require('../utils/listQuery');
 
 // Semua error diteruskan ke errorHandler pusat (next) agar AppError
 // (termasuk code/priceChanges) dan error Prisma dipetakan secara konsisten.

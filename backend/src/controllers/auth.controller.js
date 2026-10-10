@@ -3,7 +3,7 @@ const { createLog, ACTION_TYPES } = require('../services/auditLog.service');
 const { successResponse, errorResponse } = require('../utils/responseHelper');
 const prisma = require('../lib/prisma');
 
-const login = async (req, res) => {
+const login = async (req, res, next) => {
   try {
     const { email, password } = req.body;
     const result = await authService.login(email, password);
@@ -19,22 +19,22 @@ const login = async (req, res) => {
 
     return successResponse(res, result, 'Login berhasil');
   } catch (err) {
-    return errorResponse(res, err.message, err.status || 500);
+    return next(err);
   }
 };
 
-const refresh = async (req, res) => {
+const refresh = async (req, res, next) => {
   try {
     const { refreshToken } = req.body;
     const result = await authService.refreshToken(refreshToken);
 
     return successResponse(res, result, 'Token berhasil diperbarui');
   } catch (err) {
-    return errorResponse(res, err.message, err.status || 500);
+    return next(err);
   }
 };
 
-const logout = async (req, res) => {
+const logout = async (req, res, next) => {
   try {
     const { refreshToken } = req.body;
     await authService.logout(refreshToken);
@@ -50,11 +50,11 @@ const logout = async (req, res) => {
 
     return successResponse(res, null, 'Logout berhasil');
   } catch (err) {
-    return errorResponse(res, err.message, err.status || 500);
+    return next(err);
   }
 };
 
-const me = async (req, res) => {
+const me = async (req, res, next) => {
   try {
     const user = await prisma.user.findUnique({
       where: { id: req.user.id },
@@ -77,7 +77,7 @@ const me = async (req, res) => {
 
     return successResponse(res, user, 'Data user berhasil diambil');
   } catch (err) {
-    return errorResponse(res, err.message, err.status || 500);
+    return next(err);
   }
 };
 

@@ -1,6 +1,6 @@
 const stockService = require('../services/stock.service');
 const { successResponse, errorResponse, paginatedResponse } = require('../utils/responseHelper');
-const { parsePagination, parseStringParam } = require('../utils/queryParams');
+const { parsePagination, parseStringParam } = require('../utils/listQuery');
 
 // Semua error diteruskan ke errorHandler pusat (next) agar AppError dan
 // error Prisma dipetakan secara konsisten (bukan 500 mentah).
