@@ -111,7 +111,7 @@ describe('PO receive — konkurensi', () => {
   test('menolak PO tanpa item', async () => {
     setupPO({ items: [] });
 
-    await expect(poService.receive('po-1', [], 'user-1'))
+    await expect(poService.receive('po-1', [{ itemId: 'poi-1', receivedQty: 1 }], 'user-1'))
       .rejects.toMatchObject({ status: 400, message: expect.stringMatching(/tidak memiliki item/) });
     expect(mockPrisma.purchaseOrder.update).not.toHaveBeenCalled();
   });
