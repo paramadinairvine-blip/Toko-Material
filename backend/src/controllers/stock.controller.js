@@ -1,21 +1,25 @@
 const stockService = require('../services/stock.service');
 const { successResponse, errorResponse, paginatedResponse } = require('../utils/responseHelper');
-const { DEFAULT_PAGE_SIZE } = require('../utils/constants');
+const { parsePagination, parseStringParam } = require('../utils/queryParams');
+
+// Semua error diteruskan ke errorHandler pusat (next) agar AppError dan
+// error Prisma dipetakan secara konsisten (bukan 500 mentah).
 
 // ==================== Stock ====================
 
-const getAllStock = async (req, res) => {
+const getAllStock = async (req, res, next) => {
   try {
-    const { page, limit, categoryId, search, barcode, dateFrom, dateTo, lowStock } = req.query;
+    const { categoryId, search, barcode, dateFrom, dateTo, lowStock } = req.query;
+    const { page, limit } = parsePagination(req.query);
 
     const result = await stockService.getAllStock({
-      page: parseInt(page) || 1,
-      limit: parseInt(limit) || DEFAULT_PAGE_SIZE,
-      categoryId,
-      search,
-      barcode,
-      dateFrom,
-      dateTo,
+      page,
+      limit,
+      categoryId: parseStringParam(categoryId, 'categoryId'),
+      search: parseStringParam(search, 'search'),
+      barcode: parseStringParam(barcode, 'barcode'),
+      dateFrom: parseStringParam(dateFrom, 'dateFrom'),
+      dateTo: parseStringParam(dateTo, 'dateTo'),
       lowStock: lowStock === 'true',
     });
 
@@ -28,34 +32,37 @@ const getAllStock = async (req, res) => {
       'Data stok berhasil diambil'
     );
   } catch (err) {
-    return errorResponse(res, err.message, err.status || 500);
+    return next(err);
   }
 };
 
-const getStockByProduct = async (req, res) => {
+const getStockByProduct = async (req, res, next) => {
   try {
     const { productId } = req.params;
-    const { startDate, endDate, page, limit } = req.query;
+    const { startDate, endDate } = req.query;
+    const { page, limit } = parsePagination(req.query);
 
     const stock = await stockService.getCurrentStock(productId);
     const history = await stockService.getStockHistory(productId, {
-      startDate,
-      endDate,
-      page: parseInt(page) || 1,
-      limit: parseInt(limit) || DEFAULT_PAGE_SIZE,
+      startDate: parseStringParam(startDate, 'startDate'),
+      endDate: parseStringParam(endDate, 'endDate'),
+      page,
+      limit,
     });
 
     return successResponse(res, { stock, history }, 'Detail stok produk berhasil diambil');
   } catch (err) {
-    return errorResponse(res, err.message, err.status || 500);
+    return next(err);
   }
 };
 
-const adjustStock = async (req, res) => {
+const adjustStock = async (req, res, next) => {
   try {
     const { productId, variantId, unitId, quantity, notes } = req.body;
 
-    if (!productId) return errorResponse(res, 'Product ID wajib diisi', 400);
+    if (!productId || typeof productId !== 'string') return errorResponse(res, 'Product ID wajib diisi', 400);
+    if (variantId != null && typeof variantId !== 'string') return errorResponse(res, 'Variant ID tidak valid', 400);
+    if (unitId != null && typeof unitId !== 'string') return errorResponse(res, 'Unit ID tidak valid', 400);
     if (quantity === undefined || quantity === null) return errorResponse(res, 'Jumlah stok wajib diisi', 400);
 
     const parsedQty = Number(quantity);
@@ -74,40 +81,41 @@ const adjustStock = async (req, res) => {
 
     return successResponse(res, movement, 'Penyesuaian stok berhasil dilakukan');
   } catch (err) {
-    return errorResponse(res, err.message, err.status || 500);
+    return next(err);
   }
 };
 
 // ==================== Stock Opname ====================
 
-const getAllOpname = async (req, res) => {
+const getAllOpname = async (req, res, next) => {
   try {
-    const { page, limit, search, dateFrom, dateTo } = req.query;
+    const { search, dateFrom, dateTo } = req.query;
+    const { page, limit } = parsePagination(req.query);
 
     const result = await stockService.getAllOpname({
-      page: parseInt(page) || 1,
-      limit: parseInt(limit) || DEFAULT_PAGE_SIZE,
-      search,
-      dateFrom,
-      dateTo,
+      page,
+      limit,
+      search: parseStringParam(search, 'search'),
+      dateFrom: parseStringParam(dateFrom, 'dateFrom'),
+      dateTo: parseStringParam(dateTo, 'dateTo'),
     });
 
     return paginatedResponse(res, result.data, result.total, result.page, result.limit, 'Daftar stock opname berhasil diambil');
   } catch (err) {
-    return errorResponse(res, err.message, err.status || 500);
+    return next(err);
   }
 };
 
-const createOpname = async (req, res) => {
+const createOpname = async (req, res, next) => {
   try {
     const opname = await stockService.createOpname(req.user.id);
     return successResponse(res, opname, 'Sesi stock opname berhasil dibuat', 201);
   } catch (err) {
-    return errorResponse(res, err.message, err.status || 500);
+    return next(err);
   }
 };
 
-const getOpnameById = async (req, res) => {
+const getOpnameById = async (req, res, next) => {
   try {
     const prisma = require('../lib/prisma');
 
@@ -129,11 +137,11 @@ const getOpnameById = async (req, res) => {
 
     return successResponse(res, opname, 'Detail stock opname berhasil diambil');
   } catch (err) {
-    return errorResponse(res, err.message, err.status || 500);
+    return next(err);
   }
 };
 
-const updateOpnameItem = async (req, res) => {
+const updateOpnameItem = async (req, res, next) => {
   try {
     const { id, itemId } = req.params;
     const { actualStock } = req.body;
@@ -150,16 +158,16 @@ const updateOpnameItem = async (req, res) => {
     const item = await stockService.updateOpnameItem(id, itemId, parsedStock);
     return successResponse(res, item, 'Item opname berhasil diperbarui');
   } catch (err) {
-    return errorResponse(res, err.message, err.status || 500);
+    return next(err);
   }
 };
 
-const completeOpname = async (req, res) => {
+const completeOpname = async (req, res, next) => {
   try {
     const result = await stockService.completeOpname(req.params.id, req.user.id);
     return successResponse(res, result, 'Stock opname berhasil diselesaikan');
   } catch (err) {
-    return errorResponse(res, err.message, err.status || 500);
+    return next(err);
   }
 };
 
