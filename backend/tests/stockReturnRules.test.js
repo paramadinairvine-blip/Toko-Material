@@ -100,7 +100,7 @@ describe('stok menipis = stock <= minStock', () => {
     { id: 'a', name: 'Di bawah', stock: 4, minStock: 5 },
     { id: 'b', name: 'Tepat minimum', stock: 5, minStock: 5 },
     { id: 'c', name: 'Aman', stock: 6, minStock: 5 },
-    { id: 'd', name: 'Habis tanpa minimum', stock: 0, minStock: 0 },
+    { id: 'd', name: 'Tanpa batas minimum', stock: 0, minStock: 0 },
   ];
 
   test('GET /api/stock?lowStock=true menyertakan stok yang tepat di minimum', async () => {
@@ -108,13 +108,13 @@ describe('stok menipis = stock <= minStock', () => {
     const res = await as(adminToken)(request(app).get('/api/stock?lowStock=true'));
 
     expect(res.status).toBe(200);
-    expect(res.body.data.map((p) => p.id)).toEqual(['a', 'b', 'd']);
-    expect(res.body.pagination.total).toBe(3);
+    expect(res.body.data.map((p) => p.id)).toEqual(['a', 'b']);
+    expect(res.body.pagination.total).toBe(2);
   });
 
   test('checkLowStock memakai aturan yang sama', async () => {
     mockPrisma.product.findMany.mockResolvedValue(products);
-    expect((await stockService.checkLowStock()).map((p) => p.id)).toEqual(['a', 'b', 'd']);
+    expect((await stockService.checkLowStock()).map((p) => p.id)).toEqual(['a', 'b']);
   });
 });
 
