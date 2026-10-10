@@ -2,6 +2,7 @@ const prisma = require('../lib/prisma');
 const { Prisma } = require('@prisma/client');
 const { DEFAULT_PAGE_SIZE } = require('../utils/constants');
 const AppError = require('../utils/AppError');
+const { buildDateRange } = require('../utils/queryParams');
 
 /**
  * Valid action types for audit logging.
@@ -112,6 +113,67 @@ const buildRestoreData = (log) => {
 /**
  * Alasan log tidak bisa di-rollback, atau null bila bisa.
  */
+// ─── Data sensitif ──────────────────────────────────────────────────
+
+// Kunci yang tidak pernah boleh tersimpan di / keluar dari audit log
+const SENSITIVE_KEYS = new Set(['password', 'passwordHash', 'token', 'refreshToken']);
+
+/**
+ * Salinan JSON dari `data` tanpa kunci sensitif (di semua kedalaman).
+ * Dipakai saat menulis log DAN saat membaca (baris lama mungkin masih memuatnya).
+ */
+const stripSensitive = (data) => {
+  if (data === undefined || data === null) return data;
+  if (typeof data !== 'object') return data;
+  return JSON.parse(JSON.stringify(data, (key, value) => (SENSITIVE_KEYS.has(key) ? undefined : value)));
+};
+
+const sanitizeLog = (log) => ({
+  ...log,
+  oldData: stripSensitive(log.oldData),
+  newData: stripSensitive(log.newData),
+});
+
+const sameValue = (a, b) => {
+  if (a === b) return true;
+  if (a === null || a === undefined || b === null || b === undefined) return false;
+  const norm = (v) => (v instanceof Date ? v.toISOString() : String(v));
+  // Decimal/angka dari database vs string di JSON log ("65000" vs 65000.00).
+  // Dua string dibandingkan apa adanya (SKU "001" ≠ "1").
+  const isNumeric = (v) => typeof v === 'number' || (typeof v === 'object' && !(v instanceof Date));
+  if ((isNumeric(a) || isNumeric(b)) && typeof a !== 'boolean' && typeof b !== 'boolean') {
+    const na = Number(a);
+    const nb = Number(b);
+    if (norm(a).trim() !== '' && norm(b).trim() !== '' && Number.isFinite(na) && Number.isFinite(nb)) {
+      return na === nb;
+    }
+  }
+  return norm(a) === norm(b);
+};
+
+/**
+ * Apakah rollback log ini akan memulihkan sesuatu yang berarti.
+ *
+ * - DELETE di aplikasi ini selalu soft delete; yang membalikkannya hanyalah
+ *   `isActive: true`. Bila kolom itu tidak ikut dipulihkan (mis. users, yang
+ *   isActive/deletedAt-nya dijaga aturan lain) rollback tidak mengembalikan apa pun.
+ * - UPDATE dengan newData: harus ada kolom yang nilainya memang berubah.
+ */
+const hasMeaningfulRestore = (log, restoreData) => {
+  const keys = Object.keys(restoreData);
+  if (keys.length === 0) return false;
+
+  if (log.action === ACTION_TYPES.DELETE) {
+    return restoreData.isActive === true;
+  }
+
+  const newData = log.newData;
+  if (newData && typeof newData === 'object' && !Array.isArray(newData)) {
+    return keys.some((key) => key in newData && !sameValue(newData[key], restoreData[key]));
+  }
+  return true;
+};
+
 const getRollbackBlockReason = (log) => {
   if (!ROLLBACK_ACTIONS.has(log.action)) {
     return 'Hanya perubahan (UPDATE/DELETE) yang dapat di-rollback';
@@ -123,8 +185,14 @@ const getRollbackBlockReason = (log) => {
   if (!log.oldData) return 'Tidak ada data lama untuk di-rollback';
   if (!log.entityId) return 'ID record tidak ditemukan pada log ini';
   if (!getModelDelegate(log.entity)) return `Tabel "${log.entity}" tidak dikenali untuk rollback`;
-  if (Object.keys(buildRestoreData(log)).length === 0) {
+  const restoreData = buildRestoreData(log);
+  if (Object.keys(restoreData).length === 0) {
     return 'Tidak ada data yang dapat dipulihkan dari log ini';
+  }
+  if (!hasMeaningfulRestore(log, restoreData)) {
+    return log.action === ACTION_TYPES.DELETE
+      ? 'Penghapusan ini tidak dapat dibatalkan lewat rollback'
+      : 'Tidak ada perubahan yang dapat dipulihkan dari log ini';
   }
   return null;
 };
@@ -152,8 +220,9 @@ const createLog = async ({ userId, action, tableName, recordId, oldData, newData
       action,
       entity: tableName,
       entityId: recordId || null,
-      oldData: oldData || undefined,
-      newData: newData || undefined,
+      // password/token tidak pernah disimpan di audit log
+      oldData: stripSensitive(oldData) || undefined,
+      newData: stripSensitive(newData) || undefined,
       ipAddress: ipAddress || null,
       userAgent: userAgent || null,
     },
@@ -238,16 +307,10 @@ const getLogs = async ({ page = 1, limit = DEFAULT_PAGE_SIZE, userId, tableName,
   if (action) {
     where.action = action;
   }
-  if (startDate || endDate) {
-    where.createdAt = {};
-    if (startDate) {
-      where.createdAt.gte = new Date(startDate);
-    }
-    if (endDate) {
-      const end = new Date(endDate);
-      end.setHours(23, 59, 59, 999);
-      where.createdAt.lte = end;
-    }
+  // Tanggal polos (YYYY-MM-DD) = hari kalender WIB, tidak bergantung zona waktu server
+  const dateRange = buildDateRange(startDate, endDate);
+  if (dateRange) {
+    where.createdAt = dateRange;
   }
 
   const skip = (page - 1) * limit;
@@ -269,7 +332,7 @@ const getLogs = async ({ page = 1, limit = DEFAULT_PAGE_SIZE, userId, tableName,
 
   // Enrich with readable description and module label
   const enriched = data.map((log) => ({
-    ...log,
+    ...sanitizeLog(log),
     module: ENTITY_LABELS[log.entity] || log.entity || '-',
     description: generateDescription(log),
     canRollback: canRollback(log),
@@ -298,7 +361,7 @@ const getLogById = async (id) => {
     throw new AppError('Log audit tidak ditemukan', 404);
   }
 
-  return { ...log, canRollback: canRollback(log) };
+  return { ...sanitizeLog(log), canRollback: canRollback(log) };
 };
 
 /**
@@ -330,12 +393,19 @@ const rollback = async (logId, userId) => {
   // Get current state before rollback for the new audit log
   const currentRecord = await model.findUnique({ where: { id: log.entityId } });
 
-  if (!currentRecord) {
+  // User yang sudah dihapus (soft delete) tidak boleh diubah lewat jalur apa pun
+  if (!currentRecord || (log.entity === 'users' && currentRecord.deletedAt)) {
     throw new AppError('Record yang akan di-rollback tidak ditemukan', 404);
   }
 
   // Hanya kolom skalar yang aman (tanpa id/timestamp/stok/status/relasi)
   const restoreData = buildRestoreData(log);
+
+  // Data saat ini sudah sama dengan data lama → tidak ada yang dipulihkan
+  const changedKeys = Object.keys(restoreData).filter((key) => !sameValue(currentRecord[key], restoreData[key]));
+  if (changedKeys.length === 0) {
+    throw new AppError('Data saat ini sudah sama dengan data pada log, tidak ada yang perlu dipulihkan', 400);
+  }
 
   // Update the record with old data
   const restored = await model.update({
@@ -353,7 +423,8 @@ const rollback = async (logId, userId) => {
     newData: restored,
   });
 
-  return restored;
+  // Jangan pernah mengembalikan hash password ke klien
+  return stripSensitive(restored);
 };
 
 module.exports = {
@@ -363,4 +434,5 @@ module.exports = {
   getLogById,
   rollback,
   canRollback,
+  stripSensitive,
 };
