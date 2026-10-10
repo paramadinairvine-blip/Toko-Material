@@ -128,10 +128,15 @@ const validateTransaction = [
     .notEmpty().withMessage('Product ID wajib diisi pada setiap item'),
   body('items.*.quantity')
     .notEmpty().withMessage('Jumlah wajib diisi pada setiap item')
-    .isInt({ min: 1 }).withMessage('Jumlah harus minimal 1'),
+    .isInt({ min: 1 }).withMessage('Jumlah harus berupa bilangan bulat minimal 1')
+    .toInt(),
   body('items.*.price')
     .notEmpty().withMessage('Harga wajib diisi pada setiap item')
-    .isFloat({ min: 0 }).withMessage('Harga harus berupa angka positif'),
+    .isFloat({ min: 0 }).withMessage('Harga harus berupa angka positif')
+    .toFloat(),
+  body('items.*.unitId')
+    .optional({ values: 'falsy' })
+    .isString().withMessage('Unit ID tidak valid'),
   body('items.*.discount')
     .optional({ values: 'null' })
     .custom((value, { req, path }) => {
@@ -205,7 +210,8 @@ const poItemRules = [
         throw new Error('Jumlah harus bilangan bulat minimal 1');
       }
       return true;
-    }),
+    })
+    .customSanitizer((value) => Number(value)),
   remapPOItemPrice,
   body('items.*.price')
     .custom((value) => {
@@ -217,7 +223,8 @@ const poItemRules = [
         throw new Error('Harga harus berupa angka positif');
       }
       return true;
-    }),
+    })
+    .customSanitizer((value) => Number(value)),
 ];
 
 const validatePurchaseOrderUpdate = [
@@ -254,7 +261,8 @@ const validatePurchaseOrder = [
         throw new Error('Jumlah harus bilangan bulat minimal 1');
       }
       return true;
-    }),
+    })
+    .customSanitizer((value) => Number(value)),
   remapPOItemPrice,
   body('items.*.price')
     .custom((value) => {
@@ -266,7 +274,8 @@ const validatePurchaseOrder = [
         throw new Error('Harga harus berupa angka positif');
       }
       return true;
-    }),
+    })
+    .customSanitizer((value) => Number(value)),
   handleValidationErrors,
 ];
 
@@ -366,7 +375,8 @@ const validateReturn = [
     .notEmpty().withMessage('ID item transaksi wajib diisi'),
   body('items.*.quantity')
     .notEmpty().withMessage('Jumlah retur wajib diisi')
-    .isInt({ min: 1 }).withMessage('Jumlah retur harus minimal 1'),
+    .isInt({ min: 1 }).withMessage('Jumlah retur harus minimal 1')
+    .toInt(),
   handleValidationErrors,
 ];
 

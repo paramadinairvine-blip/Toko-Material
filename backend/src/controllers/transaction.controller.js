@@ -1,21 +1,26 @@
 const transactionService = require('../services/transaction.service');
-const { successResponse, errorResponse, paginatedResponse } = require('../utils/responseHelper');
-const { DEFAULT_PAGE_SIZE } = require('../utils/constants');
+const { successResponse, paginatedResponse } = require('../utils/responseHelper');
+const { TRANSACTION_TYPES, TRANSACTION_STATUS } = require('../utils/constants');
+const { parsePagination, parseEnumParam, parseStringParam } = require('../utils/queryParams');
 
-const getAll = async (req, res) => {
+// Semua error diteruskan ke errorHandler pusat (next) agar AppError
+// (termasuk code/priceChanges) dan error Prisma dipetakan secara konsisten.
+
+const getAll = async (req, res, next) => {
   try {
-    const { page, limit, type, status, unitLembagaId, startDate, endDate, search, customerName } = req.query;
+    const { type, status, unitLembagaId, startDate, endDate, search, customerName } = req.query;
+    const { page, limit } = parsePagination(req.query);
 
     const result = await transactionService.getAll({
-      page: parseInt(page) || 1,
-      limit: parseInt(limit) || DEFAULT_PAGE_SIZE,
-      type,
-      status,
-      unitLembagaId,
-      startDate,
-      endDate,
-      search,
-      customerName,
+      page,
+      limit,
+      type: parseEnumParam(type, TRANSACTION_TYPES, 'type'),
+      status: parseEnumParam(status, TRANSACTION_STATUS, 'status'),
+      unitLembagaId: parseStringParam(unitLembagaId, 'unitLembagaId'),
+      startDate: parseStringParam(startDate, 'startDate'),
+      endDate: parseStringParam(endDate, 'endDate'),
+      search: parseStringParam(search, 'search'),
+      customerName: parseStringParam(customerName, 'customerName'),
     });
 
     return paginatedResponse(
@@ -27,34 +32,35 @@ const getAll = async (req, res) => {
       'Daftar transaksi berhasil diambil'
     );
   } catch (err) {
-    return errorResponse(res, err.message, err.status || 500);
+    return next(err);
   }
 };
 
-const getById = async (req, res) => {
+const getById = async (req, res, next) => {
   try {
     const transaction = await transactionService.getById(req.params.id);
     return successResponse(res, transaction, 'Detail transaksi berhasil diambil');
   } catch (err) {
-    return errorResponse(res, err.message, err.status || 500);
+    return next(err);
   }
 };
 
-const create = async (req, res) => {
+const create = async (req, res, next) => {
   try {
     const transaction = await transactionService.create(req.body, req.user.id);
     return successResponse(res, transaction, 'Transaksi berhasil dibuat', 201);
   } catch (err) {
-    return errorResponse(res, err.message, err.status || 500);
+    // 409 PRICE_CHANGED: errorHandler menyertakan code & priceChanges di body
+    return next(err);
   }
 };
 
-const cancel = async (req, res) => {
+const cancel = async (req, res, next) => {
   try {
     const transaction = await transactionService.cancel(req.params.id, req.user.id);
     return successResponse(res, transaction, 'Transaksi berhasil dibatalkan');
   } catch (err) {
-    return errorResponse(res, err.message, err.status || 500);
+    return next(err);
   }
 };
 
