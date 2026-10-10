@@ -174,6 +174,15 @@ export default function PurchaseOrderDetail() {
   };
 
   const handleReceive = () => {
+    const over = (po?.items || []).find((item) => {
+      const remaining = Math.max(0, item.quantity - (item.receivedQty || 0));
+      return (parseInt(receivedQtys[item.id]) || 0) > remaining;
+    });
+    if (over) {
+      const remaining = Math.max(0, over.quantity - (over.receivedQty || 0));
+      toast.error(`${over.product?.name || 'Item'}: jumlah diterima melebihi sisa pesanan (maks ${remaining})`);
+      return;
+    }
     const items = (po?.items || []).map((item) => ({
       itemId: item.id,
       receivedQty: parseInt(receivedQtys[item.id]) || 0,
@@ -545,9 +554,15 @@ export default function PurchaseOrderDetail() {
                             min="0"
                             max={remaining}
                             value={receivedQtys[item.id] ?? remaining}
-                            onChange={(e) => setReceivedQtys((prev) => ({ ...prev, [item.id]: e.target.value }))}
+                            onChange={(e) => {
+                              // Never more than what is still outstanding on this PO line
+                              const raw = e.target.value;
+                              const val = raw !== '' && Number(raw) > remaining ? String(remaining) : raw;
+                              setReceivedQtys((prev) => ({ ...prev, [item.id]: val }));
+                            }}
                             className="w-20 rounded border-gray-300 text-sm py-1.5 px-2 text-right focus:border-blue-500 focus:ring-blue-500"
                           />
+                          <p className="text-xs text-gray-500 mt-1">Sisa: {remaining} {unitName} (maks)</p>
                           {factor > 1 && batchQty > 0 && (
                             <p className="text-xs text-gray-400 mt-1">
                               = {batchQty * factor} {baseUnit}
