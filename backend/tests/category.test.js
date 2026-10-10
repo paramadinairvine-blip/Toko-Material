@@ -143,9 +143,87 @@ describe('PUT /api/categories/:id', () => {
   });
 });
 
+describe('Kategori — nama ganda & lingkaran induk', () => {
+  const post = (body) => request(app)
+    .post('/api/categories')
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send(body);
+  const put = (id, body) => request(app)
+    .put(`/api/categories/${id}`)
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send(body);
+
+  test('POST: nama sama pada induk yang sama → 409', async () => {
+    mockPrisma.category.findFirst.mockResolvedValue({ id: 'cat-9' });
+
+    const res = await post({ name: '  Semen ' });
+
+    expect(res.status).toBe(409);
+    expect(mockPrisma.category.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        name: { equals: 'Semen', mode: 'insensitive' }, parentId: null, isActive: true,
+      }),
+    }));
+    expect(mockPrisma.category.create).not.toHaveBeenCalled();
+  });
+
+  test('PUT: mengganti nama menjadi nama kategori lain → 409', async () => {
+    mockPrisma.category.findUnique.mockResolvedValue({ id: 'cat-1', name: 'Semen', parentId: null });
+    mockPrisma.category.findFirst.mockResolvedValue({ id: 'cat-2' });
+
+    const res = await put('cat-1', { name: 'Cat' });
+
+    expect(res.status).toBe(409);
+    expect(mockPrisma.category.update).not.toHaveBeenCalled();
+  });
+
+  test('PUT: menyimpan ulang tanpa mengubah nama/induk tidak dianggap duplikat', async () => {
+    mockPrisma.category.findUnique.mockResolvedValue({ id: 'cat-1', name: 'Semen', parentId: null });
+    mockPrisma.category.update.mockResolvedValue({ id: 'cat-1', name: 'Semen' });
+    mockPrisma.auditLog.create.mockResolvedValue({});
+
+    const res = await put('cat-1', { name: 'Semen', description: 'baru' });
+
+    expect(res.status).toBe(200);
+    expect(mockPrisma.category.findFirst).not.toHaveBeenCalled();
+  });
+
+  test('PUT: induk := turunan sendiri (lingkaran) → 400', async () => {
+    // A(cat-a) → B(cat-b) → C(cat-c); coba jadikan C induk dari A
+    const tree = {
+      'cat-a': { id: 'cat-a', name: 'A', parentId: null },
+      'cat-b': { id: 'cat-b', name: 'B', parentId: 'cat-a' },
+      'cat-c': { id: 'cat-c', name: 'C', parentId: 'cat-b' },
+    };
+    mockPrisma.category.findUnique.mockImplementation(({ where }) => Promise.resolve(tree[where.id] || null));
+
+    const res = await put('cat-a', { name: 'Alat', parentId: 'cat-c' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/sub-kategorinya sendiri/);
+    expect(mockPrisma.category.update).not.toHaveBeenCalled();
+  });
+
+  test('PUT: memindahkan ke induk lain yang bukan turunan tetap boleh', async () => {
+    const tree = {
+      'cat-a': { id: 'cat-a', name: 'A', parentId: null },
+      'cat-x': { id: 'cat-x', name: 'X', parentId: null },
+    };
+    mockPrisma.category.findUnique.mockImplementation(({ where }) => Promise.resolve(tree[where.id] || null));
+    mockPrisma.category.update.mockResolvedValue({ id: 'cat-a' });
+    mockPrisma.auditLog.create.mockResolvedValue({});
+
+    const res = await put('cat-a', { name: 'Alat', parentId: 'cat-x' });
+
+    expect(res.status).toBe(200);
+  });
+});
+
 describe('DELETE /api/categories/:id', () => {
   test('should deactivate category', async () => {
-    mockPrisma.category.findUnique.mockResolvedValue({ ...sampleCategory, _count: { children: 0, products: 0 } });
+    mockPrisma.category.findUnique.mockResolvedValue(sampleCategory);
+    mockPrisma.category.count.mockResolvedValue(0);
+    mockPrisma.product.count.mockResolvedValue(0);
     mockPrisma.category.update.mockResolvedValue({});
     mockPrisma.auditLog.create.mockResolvedValue({});
 
@@ -156,14 +234,49 @@ describe('DELETE /api/categories/:id', () => {
     expect(res.status).toBe(200);
   });
 
-  test('should reject if has children', async () => {
-    mockPrisma.category.findUnique.mockResolvedValue({ ...sampleCategory, _count: { children: 2, products: 0 } });
+  test('should reject if has active children', async () => {
+    mockPrisma.category.findUnique.mockResolvedValue(sampleCategory);
+    mockPrisma.category.count.mockResolvedValue(2);
+    mockPrisma.product.count.mockResolvedValue(0);
 
     const res = await request(app)
       .delete('/api/categories/cat-1')
       .set('Authorization', `Bearer ${adminToken}`);
 
     expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/2 sub-kategori aktif/);
+    // hanya sub-kategori AKTIF yang dihitung
+    expect(mockPrisma.category.count).toHaveBeenCalledWith({ where: { parentId: 'cat-1', isActive: true } });
+    expect(mockPrisma.category.update).not.toHaveBeenCalled();
+  });
+
+  test('induk yang semua sub-kategorinya sudah nonaktif boleh dihapus', async () => {
+    mockPrisma.category.findUnique.mockResolvedValue(sampleCategory);
+    mockPrisma.category.count.mockResolvedValue(0); // anak aktif = 0 (yang nonaktif tidak dihitung)
+    mockPrisma.product.count.mockResolvedValue(0);
+    mockPrisma.category.update.mockResolvedValue({});
+    mockPrisma.auditLog.create.mockResolvedValue({});
+
+    const res = await request(app)
+      .delete('/api/categories/cat-1')
+      .set('Authorization', `Bearer ${adminToken}`);
+
+    expect(res.status).toBe(200);
+  });
+
+  test('kategori yang masih dipakai produk aktif tidak boleh dihapus', async () => {
+    mockPrisma.category.findUnique.mockResolvedValue(sampleCategory);
+    mockPrisma.category.count.mockResolvedValue(0);
+    mockPrisma.product.count.mockResolvedValue(3);
+
+    const res = await request(app)
+      .delete('/api/categories/cat-1')
+      .set('Authorization', `Bearer ${adminToken}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/3 produk aktif/);
+    expect(mockPrisma.product.count).toHaveBeenCalledWith({ where: { categoryId: 'cat-1', isActive: true } });
+    expect(mockPrisma.category.update).not.toHaveBeenCalled();
   });
 
   test('should reject non-ADMIN', async () => {
