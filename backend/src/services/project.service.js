@@ -1,5 +1,5 @@
 const prisma = require('../lib/prisma');
-const { DEFAULT_PAGE_SIZE } = require('../utils/constants');
+const { DEFAULT_PAGE_SIZE, ROLES } = require('../utils/constants');
 const { createLog, ACTION_TYPES } = require('./auditLog.service');
 const AppError = require('../utils/AppError');
 
@@ -35,6 +35,98 @@ const assertProjectEditable = (project) => {
   if (project.status === 'COMPLETED') {
     throw new AppError('Proyek yang sudah selesai tidak dapat diubah. Buka kembali proyek (status Sedang Berjalan) terlebih dahulu', 400);
   }
+};
+
+/**
+ * Proyek yang sudah dihapus (soft delete, isActive=false) diperlakukan
+ * seperti tidak ada untuk semua operasi tulis.
+ */
+const assertProjectExists = (project) => {
+  if (!project || project.isActive === false) {
+    throw new AppError('Proyek tidak ditemukan', 404);
+  }
+};
+
+// ─── input guards ───────────────────────────────────────────────────
+
+// Batas kewajaran jumlah material (mencegah salah ketik ekstrem / overflow Int)
+const MAX_MATERIAL_QTY = 1000000;
+
+const isMissing = (value) => value === undefined || value === null || value === '';
+
+const assertDateOrder = (startDate, endDate) => {
+  if (!startDate || !endDate) return;
+  if (new Date(endDate) < new Date(startDate)) {
+    throw new AppError('Tanggal selesai tidak boleh sebelum tanggal mulai', 400);
+  }
+};
+
+const toDateOrNull = (value, label) => {
+  if (isMissing(value)) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) throw new AppError(`${label} tidak valid`, 400);
+  return date;
+};
+
+/**
+ * Bilangan bulat 0..MAX_MATERIAL_QTY. Kosong → `fallback`.
+ */
+const toQty = (value, label, fallback = 0) => {
+  if (isMissing(value)) return fallback;
+  const num = Number(value);
+  if (!Number.isInteger(num) || num < 0) {
+    throw new AppError(`${label} harus berupa bilangan bulat ≥ 0`, 400);
+  }
+  if (num > MAX_MATERIAL_QTY) {
+    throw new AppError(`${label} terlalu besar (maksimal ${MAX_MATERIAL_QTY.toLocaleString('id-ID')}), periksa kembali angkanya`, 400);
+  }
+  return num;
+};
+
+/**
+ * Harga satuan ≥ 0, atau undefined bila tidak dikirim.
+ * Nilai 0 yang dikirim eksplisit tetap 0 (tidak diganti harga jual).
+ */
+const toUnitPrice = (value) => {
+  if (isMissing(value)) return undefined;
+  const num = Number(value);
+  if (!Number.isFinite(num) || num < 0) {
+    throw new AppError('Harga satuan harus berupa angka ≥ 0', 400);
+  }
+  return num;
+};
+
+/**
+ * Validasi daftar material: productId wajib, tidak boleh ganda, produk harus ada
+ * dan masih aktif (kecuali yang sudah tercatat di proyek: `keepProductIds`).
+ * Mengembalikan Map productId → sellPrice.
+ */
+const loadMaterialProducts = async (db, materials, keepProductIds = new Set()) => {
+  const productIds = [];
+  for (const m of materials) {
+    if (!m || typeof m.productId !== 'string' || !m.productId) {
+      throw new AppError('Product ID wajib diisi pada setiap material', 400);
+    }
+    productIds.push(m.productId);
+  }
+  if (new Set(productIds).size !== productIds.length) {
+    throw new AppError('Produk yang sama tidak boleh muncul lebih dari sekali dalam daftar material', 400);
+  }
+  if (productIds.length === 0) return new Map();
+
+  const products = await db.product.findMany({
+    where: { id: { in: productIds } },
+    select: { id: true, name: true, sellPrice: true, isActive: true },
+  });
+  const priceMap = new Map((products || []).map((p) => [p.id, Number(p.sellPrice)]));
+  if (productIds.some((pid) => !priceMap.has(pid))) {
+    throw new AppError('Produk pada daftar material tidak ditemukan', 404);
+  }
+  const inactive = products.find((p) => p.isActive === false && !keepProductIds.has(p.id));
+  if (inactive) {
+    throw new AppError(`Produk "${inactive.name}" sudah tidak aktif`, 400);
+  }
+  return priceMap;
 };
 
 // ─── public API ─────────────────────────────────────────────────────
@@ -143,44 +235,44 @@ const getById = async (id) => {
 const create = async (data, userId) => {
   const { materials, ...header } = data;
 
+  const startDate = toDateOrNull(header.startDate, 'Tanggal mulai');
+  const endDate = toDateOrNull(header.endDate, 'Tanggal selesai');
+  assertDateOrder(startDate, endDate);
+
+  const materialList = Array.isArray(materials) ? materials : [];
+  const materialRows = materialList.map((m) => ({
+    productId: m?.productId,
+    estimatedQty: toQty(m?.estimatedQty, 'Estimasi jumlah'),
+    unitPrice: toUnitPrice(m?.unitPrice),
+    notes: m?.notes || null,
+  }));
+
   const project = await prisma.$transaction(async (tx) => {
+    // Produk material harus ada & tidak ganda — dicek sebelum menulis apa pun
+    const priceMap = await loadMaterialProducts(tx, materialRows);
+
     const created = await tx.project.create({
       data: {
         name: header.name,
         description: header.description || null,
         status: header.status || 'PLANNING',
         budget: header.budget || 0,
-        startDate: header.startDate ? new Date(header.startDate) : null,
-        endDate: header.endDate ? new Date(header.endDate) : null,
+        startDate,
+        endDate,
         createdBy: userId,
       },
     });
 
     // Add materials if provided
-    if (materials && materials.length > 0) {
-      // Batch fetch product prices to avoid N+1 queries
-      const missingPriceIds = materials
-        .filter((m) => m.unitPrice === undefined || m.unitPrice === null)
-        .map((m) => m.productId);
-
-      const priceMap = {};
-      if (missingPriceIds.length > 0) {
-        const products = await tx.product.findMany({
-          where: { id: { in: [...new Set(missingPriceIds)] } },
-          select: { id: true, sellPrice: true },
-        });
-        for (const p of products) priceMap[p.id] = p.sellPrice;
-      }
-
+    if (materialRows.length > 0) {
       await tx.projectMaterial.createMany({
-        data: materials.map((m) => ({
+        data: materialRows.map((m) => ({
           projectId: created.id,
           productId: m.productId,
           estimatedQty: m.estimatedQty,
-          unitPrice: (m.unitPrice !== undefined && m.unitPrice !== null)
-            ? m.unitPrice
-            : (priceMap[m.productId] || 0),
-          notes: m.notes || null,
+          // Tanpa harga → harga jual produk; 0 eksplisit tetap 0
+          unitPrice: m.unitPrice ?? priceMap.get(m.productId) ?? 0,
+          notes: m.notes,
         })),
       });
     }
@@ -205,12 +297,12 @@ const create = async (data, userId) => {
 /**
  * Update project header fields.
  */
-const update = async (id, data, userId) => {
+const update = async (id, data, userId, userRole) => {
   const existing = await prisma.project.findUnique({
     where: { id },
     include: { materials: true },
   });
-  if (!existing) throw new AppError('Proyek tidak ditemukan', 404);
+  assertProjectExists(existing);
 
   const { materials, ...header } = data;
 
@@ -243,10 +335,21 @@ const update = async (id, data, userId) => {
     return reopened;
   }
 
+  // Tanggal: bandingkan dengan nilai tersimpan bila hanya salah satu yang dikirim
+  const startDate = header.startDate !== undefined ? toDateOrNull(header.startDate, 'Tanggal mulai') : undefined;
+  const endDate = header.endDate !== undefined ? toDateOrNull(header.endDate, 'Tanggal selesai') : undefined;
+  if (startDate !== undefined || endDate !== undefined) {
+    assertDateOrder(
+      startDate !== undefined ? startDate : existing.startDate,
+      endDate !== undefined ? endDate : existing.endDate
+    );
+  }
+
   // Validasi sinkronisasi material sebelum menulis apa pun
+  let materialRows = null;
   if (materials && Array.isArray(materials)) {
     const existingById = new Map(existing.materials.map((m) => [m.id, m]));
-    const incomingIds = new Set(materials.filter((m) => m.id).map((m) => m.id));
+    const incomingIds = new Set(materials.filter((m) => m && m.id).map((m) => m.id));
 
     for (const m of existing.materials) {
       if (!incomingIds.has(m.id) && m.usedQty > 0) {
@@ -254,12 +357,22 @@ const update = async (id, data, userId) => {
       }
     }
 
-    for (const m of materials) {
-      const current = m.id ? existingById.get(m.id) : null;
-      if (current && m.usedQty !== undefined && m.usedQty !== null && Number(m.usedQty) < current.usedQty) {
-        throw new AppError(`Penggunaan material tidak boleh dikurangi (minimal ${current.usedQty})`, 400);
+    materialRows = materials.map((m) => {
+      const current = m && m.id ? existingById.get(m.id) || null : null;
+      const usedQty = toQty(m?.usedQty, 'Jumlah terpakai', undefined);
+      // Koreksi turun (salah ketik) hanya boleh dilakukan ADMIN
+      if (current && usedQty !== undefined && usedQty < current.usedQty && userRole !== ROLES.ADMIN) {
+        throw new AppError(`Penggunaan material hanya dapat dikurangi oleh ADMIN (saat ini ${current.usedQty})`, 403);
       }
-    }
+      return {
+        current,
+        productId: m?.productId,
+        estimatedQty: toQty(m?.estimatedQty, 'Estimasi jumlah'),
+        usedQty,
+        unitPrice: toUnitPrice(m?.unitPrice),
+        notes: m?.notes || null,
+      };
+    });
   }
 
   const project = await prisma.$transaction(async (tx) => {
@@ -271,16 +384,21 @@ const update = async (id, data, userId) => {
         description: header.description !== undefined ? header.description : undefined,
         status: header.status !== undefined ? header.status : undefined,
         budget: header.budget !== undefined ? header.budget : undefined,
-        startDate: header.startDate !== undefined ? (header.startDate ? new Date(header.startDate) : null) : undefined,
-        endDate: header.endDate !== undefined ? (header.endDate ? new Date(header.endDate) : null) : undefined,
+        startDate,
+        endDate,
         updatedBy: userId,
       },
     });
 
     // Sync materials if provided
-    if (materials && Array.isArray(materials)) {
+    if (materialRows) {
+      // Produk material harus ada & tidak ganda
+      const priceMap = await loadMaterialProducts(
+        tx, materialRows, new Set(existing.materials.map((m) => m.productId)),
+      );
+
       const existingIds = existing.materials.map((m) => m.id);
-      const incomingIds = materials.filter((m) => m.id).map((m) => m.id);
+      const incomingIds = materialRows.filter((m) => m.current).map((m) => m.current.id);
 
       // Delete removed materials
       const toDelete = existingIds.filter((mid) => !incomingIds.includes(mid));
@@ -288,46 +406,32 @@ const update = async (id, data, userId) => {
         await tx.projectMaterial.deleteMany({ where: { id: { in: toDelete } } });
       }
 
-      // Batch fetch product prices for materials without unitPrice
-      const missingPriceIds = materials
-        .filter((m) => !m.unitPrice && m.productId)
-        .map((m) => m.productId);
-
-      const priceMap = {};
-      if (missingPriceIds.length > 0) {
-        const products = await tx.product.findMany({
-          where: { id: { in: [...new Set(missingPriceIds)] } },
-          select: { id: true, sellPrice: true },
-        });
-        for (const p of products) priceMap[p.id] = Number(p.sellPrice);
-      }
-
       // Upsert materials
-      for (const m of materials) {
-        const unitPrice = m.unitPrice || priceMap[m.productId] || 0;
-
-        if (m.id && existingIds.includes(m.id)) {
-          // Update existing material
+      for (const m of materialRows) {
+        if (m.current) {
+          // Update existing material. Harga yang tidak dikirim → tetap harga tersimpan
+          // (kecuali produknya diganti); 0 eksplisit tetap 0.
+          const productChanged = m.productId !== m.current.productId;
           await tx.projectMaterial.update({
-            where: { id: m.id },
+            where: { id: m.current.id },
             data: {
               productId: m.productId,
-              estimatedQty: m.estimatedQty || 0,
-              usedQty: m.usedQty !== undefined ? m.usedQty : undefined,
-              unitPrice,
-              notes: m.notes || null,
+              estimatedQty: m.estimatedQty,
+              usedQty: m.usedQty,
+              unitPrice: m.unitPrice ?? (productChanged ? (priceMap.get(m.productId) ?? 0) : undefined),
+              notes: m.notes,
             },
           });
         } else {
-          // Create new material
+          // Create new material. Tanpa harga → harga jual produk; 0 eksplisit tetap 0
           await tx.projectMaterial.create({
             data: {
               projectId: id,
               productId: m.productId,
-              estimatedQty: m.estimatedQty || 0,
-              usedQty: m.usedQty || 0,
-              unitPrice,
-              notes: m.notes || null,
+              estimatedQty: m.estimatedQty,
+              usedQty: m.usedQty ?? 0,
+              unitPrice: m.unitPrice ?? priceMap.get(m.productId) ?? 0,
+              notes: m.notes,
             },
           });
         }
@@ -354,7 +458,7 @@ const update = async (id, data, userId) => {
  */
 const remove = async (id, userId) => {
   const existing = await prisma.project.findUnique({ where: { id } });
-  if (!existing) throw new AppError('Proyek tidak ditemukan', 404);
+  assertProjectExists(existing);
 
   const project = await prisma.project.update({
     where: { id },
@@ -379,25 +483,39 @@ const remove = async (id, userId) => {
  */
 const addMaterial = async (projectId, materialData, userId) => {
   const project = await prisma.project.findUnique({ where: { id: projectId } });
-  if (!project) throw new AppError('Proyek tidak ditemukan', 404);
+  assertProjectExists(project);
   assertProjectEditable(project);
 
-  let unitPrice = materialData.unitPrice;
-  if (unitPrice === undefined || unitPrice === null) {
-    const product = await prisma.product.findUnique({
-      where: { id: materialData.productId },
-      select: { sellPrice: true },
-    });
-    unitPrice = product ? product.sellPrice : 0;
+  const input = materialData || {};
+  if (typeof input.productId !== 'string' || !input.productId) {
+    throw new AppError('Product ID wajib diisi', 400);
+  }
+  const estimatedQty = toQty(input.estimatedQty, 'Estimasi jumlah');
+  let unitPrice = toUnitPrice(input.unitPrice);
+
+  const product = await prisma.product.findUnique({
+    where: { id: input.productId },
+    select: { id: true, sellPrice: true, isActive: true },
+  });
+  if (!product) throw new AppError('Produk tidak ditemukan', 404);
+  if (product.isActive === false) throw new AppError('Produk sudah tidak aktif', 400);
+  if (unitPrice === undefined) unitPrice = product.sellPrice;
+
+  const duplicate = await prisma.projectMaterial.findFirst({
+    where: { projectId, productId: input.productId },
+    select: { id: true },
+  });
+  if (duplicate) {
+    throw new AppError('Produk tersebut sudah ada di daftar material proyek ini', 409);
   }
 
   const material = await prisma.projectMaterial.create({
     data: {
       projectId,
-      productId: materialData.productId,
-      estimatedQty: materialData.estimatedQty,
+      productId: input.productId,
+      estimatedQty,
       unitPrice,
-      notes: materialData.notes || null,
+      notes: input.notes || null,
     },
     include: {
       product: { select: { id: true, name: true, sku: true, unit: true } },
@@ -418,7 +536,15 @@ const addMaterial = async (projectId, materialData, userId) => {
 /**
  * Update the used quantity of a material in a project.
  */
-const updateMaterialUsage = async (projectId, materialId, usedQty, userId) => {
+const updateMaterialUsage = async (projectId, materialId, usedQty, userId, userRole) => {
+  // usedQty hanyalah catatan realisasi pemakaian: tidak mengubah stok produk
+  // maupun `spent` proyek (keduanya digerakkan oleh transaksi/retur), jadi
+  // koreksi naik/turun cukup menulis ulang angkanya + audit log.
+  const newUsedQty = toQty(usedQty, 'Jumlah penggunaan', undefined);
+  if (newUsedQty === undefined) {
+    throw new AppError('Jumlah penggunaan (usedQty) wajib diisi', 400);
+  }
+
   const material = await prisma.projectMaterial.findUnique({ where: { id: materialId } });
   if (!material || material.projectId !== projectId) {
     throw new AppError('Material proyek tidak ditemukan', 404);
@@ -426,20 +552,21 @@ const updateMaterialUsage = async (projectId, materialId, usedQty, userId) => {
 
   const project = await prisma.project.findUnique({
     where: { id: projectId },
-    select: { id: true, status: true },
+    select: { id: true, status: true, isActive: true },
   });
-  if (!project) throw new AppError('Proyek tidak ditemukan', 404);
+  assertProjectExists(project);
   assertProjectEditable(project);
 
   const oldUsedQty = material.usedQty;
 
-  if (usedQty < oldUsedQty) {
-    throw new AppError(`Penggunaan tidak boleh dikurangi (minimal ${oldUsedQty})`, 400);
+  // Koreksi turun (mis. salah ketik 999 padahal 9) hanya boleh dilakukan ADMIN
+  if (newUsedQty < oldUsedQty && userRole !== ROLES.ADMIN) {
+    throw new AppError(`Penggunaan material hanya dapat dikurangi oleh ADMIN (saat ini ${oldUsedQty})`, 403);
   }
 
   const updated = await prisma.projectMaterial.update({
     where: { id: materialId },
-    data: { usedQty },
+    data: { usedQty: newUsedQty },
     include: {
       product: { select: { id: true, name: true, sku: true, unit: true } },
     },
@@ -451,7 +578,7 @@ const updateMaterialUsage = async (projectId, materialId, usedQty, userId) => {
     tableName: 'project_materials',
     recordId: materialId,
     oldData: { usedQty: oldUsedQty },
-    newData: { usedQty },
+    newData: { usedQty: newUsedQty },
   });
 
   return updated;

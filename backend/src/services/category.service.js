@@ -58,6 +58,9 @@ const create = async ({ name, description, parentId, userId }) => {
     if (!parent) {
       throw new AppError('Kategori induk tidak ditemukan', 404);
     }
+    if (parent.isActive === false) {
+      throw new AppError('Kategori induk sudah tidak aktif', 400);
+    }
   }
 
   return prisma.category.create({
@@ -86,6 +89,9 @@ const update = async (id, { name, description, parentId, userId }) => {
     const parent = await prisma.category.findUnique({ where: { id: parentId } });
     if (!parent) {
       throw new AppError('Kategori induk tidak ditemukan', 404);
+    }
+    if (parent.isActive === false && parentId !== existing.parentId) {
+      throw new AppError('Kategori induk sudah tidak aktif', 400);
     }
   }
 

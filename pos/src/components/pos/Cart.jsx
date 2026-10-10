@@ -23,6 +23,13 @@ export default function Cart() {
     productBaseQtyMap[i.productId] = (productBaseQtyMap[i.productId] || 0) + i.quantity * factor;
   });
 
+  const handleClearCart = () => {
+    if (items.length === 0) return;
+    if (window.confirm('Kosongkan keranjang? Semua item akan dihapus.')) {
+      clearCart();
+    }
+  };
+
   const hasOverStock = items.some((i) => {
     const stock = i.product?.stock || 0;
     return productBaseQtyMap[i.productId] > stock;
@@ -78,7 +85,7 @@ export default function Cart() {
             </button>
           )}
           <button
-            onClick={clearCart}
+            onClick={handleClearCart}
             className="text-xs text-red-500 hover:text-red-700 flex items-center gap-1 transition-colors"
           >
             <HiTrash className="w-3.5 h-3.5" />

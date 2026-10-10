@@ -105,7 +105,7 @@ export const projectAPI = {
 
 // ==================== Report ====================
 export const reportAPI = {
-  getDashboard: () => api.get('/reports/dashboard'),
+  getDashboard: (params) => api.get('/reports/dashboard', { params }),
   getStock: (params) => api.get('/reports/stock', { params }),
   getFinancial: (params) => api.get('/reports/financial', { params }),
   getTrend: (params) => api.get('/reports/trend', { params }),

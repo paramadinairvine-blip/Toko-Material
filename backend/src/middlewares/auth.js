@@ -17,10 +17,10 @@ const authenticate = async (req, res, next) => {
     // Cek apakah user masih aktif di database
     const user = await prisma.user.findUnique({
       where: { id: decoded.id },
-      select: { id: true, email: true, role: true, isActive: true },
+      select: { id: true, email: true, role: true, isActive: true, deletedAt: true },
     });
 
-    if (!user || !user.isActive) {
+    if (!user || !user.isActive || user.deletedAt) {
       return errorResponse(res, 'Akun tidak aktif atau telah dihapus', 403);
     }
 

@@ -94,6 +94,7 @@ describe('PUT /api/products/:id — field yang dikendalikan server', () => {
   test('tidak menulis stock/isActive/id/createdBy/timestamps dari body', async () => {
     mockPrisma.product.findUnique.mockResolvedValue(sampleProduct);
     mockPrisma.product.update.mockResolvedValue(sampleProduct);
+    mockPrisma.category.findUnique.mockResolvedValue({ id: 'cat-1', name: 'Semen' });
     mockPrisma.auditLog.create.mockResolvedValue({});
 
     const res = await request(app)

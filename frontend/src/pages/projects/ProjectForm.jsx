@@ -171,6 +171,8 @@ export default function ProjectForm() {
       }
       return updated;
     });
+    // Budget is calculated from the materials: its message is stale once they change
+    if (errors.budget) setErrors((prev) => ({ ...prev, budget: undefined }));
     setIsDirty(true);
   };
 
@@ -185,6 +187,7 @@ export default function ProjectForm() {
     } else {
       setMaterials((prev) => prev.filter((_, i) => i !== index));
     }
+    if (errors.budget) setErrors((prev) => ({ ...prev, budget: undefined }));
     setIsDirty(true);
   };
 
@@ -238,7 +241,7 @@ export default function ProjectForm() {
         productId: m.productId,
         estimatedQty: parseFloat(m.estimatedQty) || 0,
         usedQty: isEdit ? (parseInt(m.usedQty, 10) || 0) : 0,
-        unitPrice: parseFloat(m.unitPrice) || 0,
+        unitPrice: m.unitPrice === '' || m.unitPrice == null ? undefined : (parseFloat(m.unitPrice) || 0),
         notes: m.notes?.trim() || null,
       }));
 

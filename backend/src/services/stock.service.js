@@ -1,18 +1,16 @@
 const prisma = require('../lib/prisma');
 const { DEFAULT_PAGE_SIZE } = require('../utils/constants');
 const { createLog, ACTION_TYPES } = require('./auditLog.service');
-const { format } = require('date-fns');
 const AppError = require('../utils/AppError');
 const logger = require('../utils/logger');
-
-const formatWIB = (date, fmt) => {
-  const wib = new Date(date.getTime() + 7 * 60 * 60 * 1000);
-  return format(wib, fmt);
-};
-
 // Day boundaries in WIB (+07:00) for 'yyyy-MM-dd'; full ISO strings are used as-is
-const wibDayStart = (d) => (String(d).includes('T') ? new Date(d) : new Date(`${d}T00:00:00+07:00`));
-const wibDayEnd = (d) => (String(d).includes('T') ? new Date(d) : new Date(`${d}T23:59:59.999+07:00`));
+const { wibDateRange } = require('../utils/wib');
+const { nextOpnameNumber } = require('../utils/documentNumber');
+const { resolveFactorFromDb, toBaseQty } = require('../utils/unitResolver');
+
+// Stok menipis = stok sudah di titik minimum atau di bawahnya (stock <= minStock).
+// Dipakai sama oleh daftar stok menipis dan notifikasi.
+const isLowStock = (p) => p.minStock > 0 && p.stock <= p.minStock;
 
 /**
  * Get the current stock of a product (or a specific variant).
@@ -54,7 +52,7 @@ const getCurrentStock = async (productId, variantId = null) => {
 
 /**
  * List all product stock with pagination.
- * Optionally filter to only low-stock items (stock < minStock).
+ * Optionally filter to only low-stock items (stock <= minStock).
  */
 const getAllStock = async ({ page = 1, limit = DEFAULT_PAGE_SIZE, categoryId, search, barcode, dateFrom, dateTo, lowStock = false } = {}) => {
   const where = { isActive: true };
@@ -74,10 +72,8 @@ const getAllStock = async ({ page = 1, limit = DEFAULT_PAGE_SIZE, categoryId, se
     where.barcode = { contains: barcode, mode: 'insensitive' };
   }
 
-  if (dateFrom || dateTo) {
-    const movementWhere = {};
-    if (dateFrom) movementWhere.gte = wibDayStart(dateFrom);
-    if (dateTo) movementWhere.lte = wibDayEnd(dateTo);
+  const movementWhere = wibDateRange(dateFrom, dateTo);
+  if (movementWhere) {
     where.stockMovements = {
       some: { createdAt: movementWhere },
     };
@@ -99,7 +95,7 @@ const getAllStock = async ({ page = 1, limit = DEFAULT_PAGE_SIZE, categoryId, se
       orderBy: { stock: 'asc' },
     });
 
-    const filtered = products.filter((p) => p.stock < p.minStock);
+    const filtered = products.filter(isLowStock);
     const total = filtered.length;
     const data = filtered.slice(skip, skip + limit);
 
@@ -142,16 +138,11 @@ const addMovement = async ({ productId, variantId, unitId, quantity, movementTyp
     }
 
 
-    // Convert quantity to base unit if unitId differs
-    let convertedQty = quantity;
-    if (unitId && product.unitId && unitId !== product.unitId) {
-      const productUnit = await tx.productUnit.findUnique({
-        where: { productId_unitId: { productId, unitId } },
-      });
-      if (productUnit) {
-        convertedQty = Math.round(quantity * Number(productUnit.conversionFactor));
-      }
-    }
+    // Convert quantity to base unit. ProductUnit (productId, unitId) dipakai
+    // apa pun nilai product.unitId / flag isBaseUnit; satuan yang tidak
+    // terdaftar untuk produk ini ditolak (400), tidak dianggap 1:1.
+    const factor = await resolveFactorFromDb(tx, productId, unitId, product);
+    const convertedQty = toBaseQty(quantity, factor);
 
     if (!Number.isFinite(convertedQty) || convertedQty < 0) {
       throw new AppError('Jumlah stok tidak boleh negatif', 400);
@@ -259,7 +250,7 @@ const adjustStock = async ({ productId, variantId, unitId, quantity, notes, user
 };
 
 /**
- * Check all products whose stock is below their minStock threshold.
+ * Check all products whose stock is at or below their minStock threshold.
  */
 const checkLowStock = async () => {
   const products = await prisma.product.findMany({
@@ -276,7 +267,7 @@ const checkLowStock = async () => {
     orderBy: { stock: 'asc' },
   });
 
-  return products.filter((p) => p.stock < p.minStock);
+  return products.filter(isLowStock);
 };
 
 /**
@@ -285,11 +276,9 @@ const checkLowStock = async () => {
 const getStockHistory = async (productId, { startDate, endDate, page = 1, limit = DEFAULT_PAGE_SIZE } = {}) => {
   const where = { productId };
 
-  if (startDate || endDate) {
-    where.createdAt = {};
-    if (startDate) where.createdAt.gte = new Date(startDate);
-    if (endDate) where.createdAt.lte = new Date(endDate);
-  }
+  // Tanggal polos (yyyy-MM-dd) dihitung sebagai hari WIB
+  const createdAt = wibDateRange(startDate, endDate);
+  if (createdAt) where.createdAt = createdAt;
 
   const skip = (page - 1) * limit;
 
@@ -319,11 +308,8 @@ const getAllOpname = async ({ page = 1, limit = DEFAULT_PAGE_SIZE, search, dateF
   if (search) {
     where.opnameNumber = { contains: search, mode: 'insensitive' };
   }
-  if (dateFrom || dateTo) {
-    where.createdAt = {};
-    if (dateFrom) where.createdAt.gte = wibDayStart(dateFrom);
-    if (dateTo) where.createdAt.lte = wibDayEnd(dateTo);
-  }
+  const createdAt = wibDateRange(dateFrom, dateTo);
+  if (createdAt) where.createdAt = createdAt;
 
   const skip = (page - 1) * limit;
 
@@ -349,14 +335,16 @@ const getAllOpname = async ({ page = 1, limit = DEFAULT_PAGE_SIZE, search, dateF
  * Snapshots every active product's current system stock.
  */
 const createOpname = async (userId) => {
-  const opnameNumber = `OPN-${formatWIB(new Date(), 'yyyyMMdd-HHmmss')}`;
-
   const products = await prisma.product.findMany({
     where: { isActive: true },
     select: { id: true, stock: true },
   });
 
   const opname = await prisma.$transaction(async (tx) => {
+    // Nomor OPN-YYYYMMDD-HHmmss (WIB) dibuat di dalam transaksi dengan
+    // advisory lock, jadi dua sesi pada detik yang sama tidak bentrok.
+    const opnameNumber = await nextOpnameNumber(tx);
+
     const created = await tx.stockOpname.create({
       data: {
         opnameNumber,
@@ -395,7 +383,7 @@ const createOpname = async (userId) => {
     action: ACTION_TYPES.CREATE,
     tableName: 'stock_opnames',
     recordId: opname.id,
-    newData: { opnameNumber, productCount: products.length },
+    newData: { opnameNumber: opname.opnameNumber, productCount: products.length },
   });
 
   return opname;
@@ -556,9 +544,8 @@ const notifyLowStock = async (productId) => {
   if (!product) return;
 
   const isOutOfStock = product.stock <= 0;
-  const isLowStock = product.minStock > 0 && product.stock <= product.minStock;
 
-  if (!isOutOfStock && !isLowStock) return;
+  if (!isOutOfStock && !isLowStock(product)) return;
 
   const admins = await prisma.user.findMany({
     where: { role: 'ADMIN', isActive: true, deletedAt: null },

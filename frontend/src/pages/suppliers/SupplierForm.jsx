@@ -69,7 +69,15 @@ export default function SupplierForm() {
   const validate = () => {
     const errs = {};
     if (!form.name.trim()) errs.name = 'Nama supplier wajib diisi';
-    if (!form.phone.trim()) errs.phone = 'Nomor telepon wajib diisi';
+    const phone = form.phone.trim();
+    const phoneDigits = phone.replace(/\D/g, '');
+    if (!phone) {
+      errs.phone = 'Nomor telepon wajib diisi';
+    } else if (!/^\+?[\d\s-]+$/.test(phone)) {
+      errs.phone = 'Nomor telepon hanya boleh berisi angka, spasi, tanda + dan -';
+    } else if (phoneDigits.length < 8 || phoneDigits.length > 15) {
+      errs.phone = 'Nomor telepon harus 8-15 digit';
+    }
     setErrors(errs);
     return Object.keys(errs).length === 0;
   };

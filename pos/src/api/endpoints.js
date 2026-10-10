@@ -4,7 +4,9 @@ import api from './axiosInstance';
 export const authAPI = {
   login: (data) => api.post('/auth/login', data),
   refresh: (refreshToken) => api.post('/auth/refresh', { refreshToken }),
-  logout: (refreshToken) => api.post('/auth/logout', { refreshToken }),
+  // accessToken: only for revoking a session that was never stored (login refused for the role)
+  logout: (refreshToken, accessToken) =>
+    api.post('/auth/logout', { refreshToken }, accessToken ? { _token: accessToken, _retry: true } : undefined),
   me: () => api.get('/auth/me'),
 };
 

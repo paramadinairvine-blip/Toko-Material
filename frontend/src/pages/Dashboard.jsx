@@ -112,13 +112,24 @@ export default function Dashboard() {
   const { role } = useAuth();
   const canViewFinancial = role === ROLES.ADMIN || role === ROLES.VIEWER;
 
+  // The month selector (ADMIN/VIEWER) also drives the dashboard summary. For the
+  // current month no params are sent, so the server uses its own month range.
+  const isCurrentMonth = month === now.getMonth() && year === now.getFullYear();
+  const useSelectedMonth = canViewFinancial && !isCurrentMonth;
+
   const { data: dashboard, isLoading } = useQuery({
-    queryKey: ['dashboard'],
+    queryKey: ['dashboard', useSelectedMonth ? `${year}-${month}` : 'current'],
     queryFn: async () => {
-      const { data } = await reportAPI.getDashboard();
+      const { data } = await reportAPI.getDashboard(
+        useSelectedMonth
+          ? { startDate: startOfMonthWIB(year, month), endDate: endOfMonthWIB(year, month) }
+          : undefined
+      );
       return data.data;
     },
     refetchInterval: 30000,
+    // Keep showing the previous month while the newly selected one loads
+    placeholderData: (prev) => prev,
   });
 
   // Trend report for selected period (only for ADMIN/VIEWER)
@@ -249,7 +260,7 @@ export default function Dashboard() {
           color="green"
         />
         <StatCard
-          title="Transaksi Bulan Ini"
+          title={useSelectedMonth ? `Transaksi ${MONTHS[month]} ${year}` : 'Transaksi Bulan Ini'}
           value={d.monthlyTransaction?.count?.toLocaleString('id-ID') || '0'}
           subtitle={formatRupiah(d.monthlyTransaction?.total)}
           icon={HiShoppingCart}

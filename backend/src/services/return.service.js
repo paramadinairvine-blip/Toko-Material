@@ -1,14 +1,10 @@
 const prisma = require('../lib/prisma');
 const { Prisma } = require('@prisma/client');
-const { format } = require('date-fns');
 const { DEFAULT_PAGE_SIZE } = require('../utils/constants');
 const { createLog, ACTION_TYPES } = require('./auditLog.service');
 const AppError = require('../utils/AppError');
-
-const formatWIB = (date, fmt) => {
-  const wib = new Date(date.getTime() + 7 * 60 * 60 * 1000);
-  return format(wib, fmt);
-};
+const { wibDateRange } = require('../utils/wib');
+const { nextDailyNumber } = require('../utils/documentNumber');
 
 // ─── helpers ────────────────────────────────────────────────────────
 
@@ -20,29 +16,18 @@ const returnIncludes = {
     },
   },
   transaction: {
-    select: { id: true, transactionNumber: true, type: true, total: true, customerName: true, projectId: true },
+    select: { id: true, transactionNumber: true, type: true, status: true, total: true, customerName: true, projectId: true },
   },
   creator: { select: { id: true, fullName: true } },
 };
 
-const generateReturnNumber = async (tx) => {
-  const today = formatWIB(new Date(), 'yyyyMMdd');
-  const prefix = `RTN-${today}-`;
-
-  const last = await tx.transactionReturn.findFirst({
-    where: { returnNumber: { startsWith: prefix } },
-    orderBy: { returnNumber: 'desc' },
-    select: { returnNumber: true },
-  });
-
-  let seq = 1;
-  if (last) {
-    const lastSeq = parseInt(last.returnNumber.replace(prefix, ''), 10);
-    if (!isNaN(lastSeq)) seq = lastSeq + 1;
-  }
-
-  return `${prefix}${String(seq).padStart(4, '0')}`;
-};
+// RTN-YYYYMMDD-XXXX (tanggal WIB), diserialkan dengan advisory lock agar
+// retur yang dibuat bersamaan tidak mendapat nomor yang sama.
+const generateReturnNumber = (tx) => nextDailyNumber(tx, {
+  prefix: 'RTN',
+  model: 'transactionReturn',
+  field: 'returnNumber',
+});
 
 const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 
@@ -63,11 +48,9 @@ const getAll = async ({ page = 1, limit = DEFAULT_PAGE_SIZE, search, startDate, 
       { transaction: { transactionNumber: { contains: search, mode: 'insensitive' } } },
     ];
   }
-  if (startDate || endDate) {
-    where.createdAt = {};
-    if (startDate) where.createdAt.gte = new Date(startDate);
-    if (endDate) where.createdAt.lte = new Date(endDate);
-  }
+  // Tanggal polos (yyyy-MM-dd) dihitung sebagai hari WIB
+  const createdAt = wibDateRange(startDate, endDate);
+  if (createdAt) where.createdAt = createdAt;
 
   const skip = (page - 1) * limit;
 
@@ -183,6 +166,9 @@ const create = async (data, userId) => {
       }
 
       const qty = Number(ri.quantity);
+      if (!Number.isInteger(qty) || qty < 1) {
+        throw new AppError('Jumlah retur harus berupa bilangan bulat minimal 1', 400);
+      }
       const alreadyReturned = returnedMap[ri.transactionItemId] || 0;
       const maxReturnable = originalItem.quantity - alreadyReturned;
 
@@ -264,7 +250,7 @@ const create = async (data, userId) => {
     // returns / transactions / adjustments on the same products.
     const stockProductIds = [...new Set(processedItems.map((p) => p.productId))];
     if (stockProductIds.length > 0) {
-      await tx.$queryRaw`SELECT id FROM "products" WHERE id IN (${Prisma.join(stockProductIds)}) FOR UPDATE`;
+      await tx.$queryRaw`SELECT id FROM "products" WHERE id IN (${Prisma.join(stockProductIds)}) ORDER BY id FOR UPDATE`;
     }
     for (const item of processedItems) {
       const product = await tx.product.findUnique({ where: { id: item.productId } });

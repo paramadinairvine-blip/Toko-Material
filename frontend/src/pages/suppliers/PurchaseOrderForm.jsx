@@ -149,8 +149,14 @@ export default function PurchaseOrderForm() {
     return price > 0 ? price.toString() : '';
   };
 
+  // Clear a field's validation message as soon as the field changes
+  const clearError = (field) => {
+    if (errors[field]) setErrors((prev) => ({ ...prev, [field]: undefined }));
+  };
+
   const updateItem = (index, field, value) => {
     setIsDirty(true);
+    clearError('items');
     setItems((prev) => {
       const updated = [...prev];
       updated[index] = { ...updated[index], [field]: value };
@@ -176,6 +182,7 @@ export default function PurchaseOrderForm() {
 
   const removeItem = (index) => {
     if (items.length <= 1) return;
+    clearError('items');
     setItems((prev) => prev.filter((_, i) => i !== index));
   };
 
@@ -311,7 +318,7 @@ export default function PurchaseOrderForm() {
             <Select
               label="Supplier *"
               value={supplierId}
-              onChange={(val) => { setSupplierId(val); setIsDirty(true); }}
+              onChange={(val) => { setSupplierId(val); setIsDirty(true); clearError('supplierId'); }}
               options={supplierOptions}
               placeholder="Pilih supplier..."
               searchable
