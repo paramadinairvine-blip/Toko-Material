@@ -97,10 +97,11 @@ const toUnitPrice = (value) => {
 };
 
 /**
- * Validasi daftar material: productId wajib, tidak boleh ganda, produk harus ada.
+ * Validasi daftar material: productId wajib, tidak boleh ganda, produk harus ada
+ * dan masih aktif (kecuali yang sudah tercatat di proyek: `keepProductIds`).
  * Mengembalikan Map productId → sellPrice.
  */
-const loadMaterialProducts = async (db, materials) => {
+const loadMaterialProducts = async (db, materials, keepProductIds = new Set()) => {
   const productIds = [];
   for (const m of materials) {
     if (!m || typeof m.productId !== 'string' || !m.productId) {
@@ -115,11 +116,15 @@ const loadMaterialProducts = async (db, materials) => {
 
   const products = await db.product.findMany({
     where: { id: { in: productIds } },
-    select: { id: true, sellPrice: true },
+    select: { id: true, name: true, sellPrice: true, isActive: true },
   });
   const priceMap = new Map((products || []).map((p) => [p.id, Number(p.sellPrice)]));
   if (productIds.some((pid) => !priceMap.has(pid))) {
     throw new AppError('Produk pada daftar material tidak ditemukan', 404);
+  }
+  const inactive = products.find((p) => p.isActive === false && !keepProductIds.has(p.id));
+  if (inactive) {
+    throw new AppError(`Produk "${inactive.name}" sudah tidak aktif`, 400);
   }
   return priceMap;
 };
@@ -388,7 +393,9 @@ const update = async (id, data, userId, userRole) => {
     // Sync materials if provided
     if (materialRows) {
       // Produk material harus ada & tidak ganda
-      const priceMap = await loadMaterialProducts(tx, materialRows);
+      const priceMap = await loadMaterialProducts(
+        tx, materialRows, new Set(existing.materials.map((m) => m.productId)),
+      );
 
       const existingIds = existing.materials.map((m) => m.id);
       const incomingIds = materialRows.filter((m) => m.current).map((m) => m.current.id);
@@ -488,9 +495,10 @@ const addMaterial = async (projectId, materialData, userId) => {
 
   const product = await prisma.product.findUnique({
     where: { id: input.productId },
-    select: { id: true, sellPrice: true },
+    select: { id: true, sellPrice: true, isActive: true },
   });
   if (!product) throw new AppError('Produk tidak ditemukan', 404);
+  if (product.isActive === false) throw new AppError('Produk sudah tidak aktif', 400);
   if (unitPrice === undefined) unitPrice = product.sellPrice;
 
   const duplicate = await prisma.projectMaterial.findFirst({

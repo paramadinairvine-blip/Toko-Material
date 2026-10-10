@@ -213,20 +213,25 @@ const normalizeVariants = (variants) => {
 // ─── reference helpers ──────────────────────────────────────────────
 
 /**
- * Pastikan relasi yang dikirim memang ada (→ 404 yang jelas, bukan error FK).
+ * Pastikan relasi yang dikirim memang ada (→ 404 yang jelas, bukan error FK)
+ * dan masih aktif. Relasi nonaktif yang sudah terpasang pada produk (`existing`)
+ * tetap boleh dikirim ulang, supaya produk lama masih bisa diedit.
  */
-const assertReferencesExist = async (data) => {
+const assertReferencesExist = async (data, existing = null) => {
   const checks = [
-    ['categoryId', prisma.category, 'Kategori tidak ditemukan'],
-    ['supplierId', prisma.supplier, 'Supplier tidak ditemukan'],
-    ['brandId', prisma.brand, 'Brand tidak ditemukan'],
-    ['unitId', prisma.unitOfMeasure, 'Satuan tidak ditemukan'],
+    ['categoryId', prisma.category, 'Kategori'],
+    ['supplierId', prisma.supplier, 'Supplier'],
+    ['brandId', prisma.brand, 'Brand'],
+    ['unitId', prisma.unitOfMeasure, 'Satuan'],
   ];
   const found = {};
-  for (const [field, model, message] of checks) {
+  for (const [field, model, label] of checks) {
     if (!data[field]) continue;
     const row = await model.findUnique({ where: { id: data[field] } });
-    if (!row) throw new AppError(message, 404);
+    if (!row) throw new AppError(`${label} tidak ditemukan`, 404);
+    if (row.isActive === false && existing?.[field] !== data[field]) {
+      throw new AppError(`${label} sudah tidak aktif`, 400);
+    }
     found[field] = row;
   }
   return found;
@@ -435,7 +440,7 @@ const update = async (id, data, userId) => {
   const variants = normalizeVariants(data?.variants);
   const units = normalizeUnits(data?.units);
 
-  const refs = await assertReferencesExist(productData);
+  const refs = await assertReferencesExist(productData, existing);
   await assertUniqueCodes(productData, id);
 
   const product = await prisma.$transaction(async (tx) => {

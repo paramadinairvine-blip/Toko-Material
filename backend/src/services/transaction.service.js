@@ -248,6 +248,10 @@ const create = async (data, userId) => {
     if (headerDiscount < 0) throw new AppError('Diskon tidak boleh negatif', 400);
     if (tax < 0) throw new AppError('Pajak tidak boleh negatif', 400);
     if (paidAmount < 0) throw new AppError('Jumlah bayar tidak boleh negatif', 400);
+    const dueDate = header.dueDate ? new Date(header.dueDate) : null;
+    if (dueDate && Number.isNaN(dueDate.getTime())) {
+      throw new AppError('Tanggal jatuh tempo tidak valid', 400);
+    }
 
     // Diskon yang melebihi subtotal tidak lagi dipangkas diam-diam (dulu
     // menghasilkan penjualan Rp 0) — bandingkan dalam sen agar aman dari float.
@@ -285,7 +289,7 @@ const create = async (data, userId) => {
         total,
         paidAmount,
         changeAmount,
-        dueDate: header.dueDate ? new Date(header.dueDate) : null,
+        dueDate,
         paidAt: isPaid ? new Date() : null,
         projectId: header.projectId || null,
         unitLembagaId: header.unitLembagaId || null,

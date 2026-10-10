@@ -413,6 +413,20 @@ const rollback = async (logId, userId) => {
     data: restoreData,
   });
 
+  // Harga produk yang ikut dipulihkan tetap dicatat di riwayat harga
+  if (log.entity === 'products' && (changedKeys.includes('buyPrice') || changedKeys.includes('sellPrice'))) {
+    await prisma.priceHistory.create({
+      data: {
+        productId: log.entityId,
+        oldBuy: currentRecord.buyPrice,
+        newBuy: restored.buyPrice,
+        oldSell: currentRecord.sellPrice,
+        newSell: restored.sellPrice,
+        changedBy: userId,
+      },
+    });
+  }
+
   // Create rollback audit log
   await createLog({
     userId,
