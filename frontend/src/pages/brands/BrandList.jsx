@@ -29,6 +29,8 @@ export default function BrandList() {
         page,
         limit: 20,
         search: search || undefined,
+        // "Hapus" only deactivates a brand: hide deactivated ones, same as the unit list
+        isActive: true,
       });
       return res;
     },

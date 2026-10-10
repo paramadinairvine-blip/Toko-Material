@@ -171,6 +171,8 @@ export default function ProjectForm() {
       }
       return updated;
     });
+    // Budget is calculated from the materials: its message is stale once they change
+    if (errors.budget) setErrors((prev) => ({ ...prev, budget: undefined }));
     setIsDirty(true);
   };
 
@@ -185,6 +187,7 @@ export default function ProjectForm() {
     } else {
       setMaterials((prev) => prev.filter((_, i) => i !== index));
     }
+    if (errors.budget) setErrors((prev) => ({ ...prev, budget: undefined }));
     setIsDirty(true);
   };
 
