@@ -42,7 +42,8 @@ const hashPassword = async (password) => {
 const login = async (email, password) => {
   const user = await prisma.user.findUnique({ where: { email } });
 
-  if (!user) {
+  // User yang sudah dihapus (soft delete) diperlakukan seperti tidak ada
+  if (!user || user.deletedAt) {
     throw new AppError('Email atau password salah', 401);
   }
 
@@ -123,7 +124,7 @@ const refreshToken = async (token) => {
     throw new AppError('Refresh token telah kadaluarsa, silakan login kembali', 401);
   }
 
-  if (!stored.user.isActive) {
+  if (!stored.user.isActive || stored.user.deletedAt) {
     throw new AppError('Akun tidak aktif, silakan hubungi administrator', 403);
   }
 
